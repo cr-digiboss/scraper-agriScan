@@ -13,6 +13,7 @@ import time
 import random
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page
@@ -285,6 +286,212 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Kverneland (matériel de travail du sol, semis, etc.)
+# Structure : catégorie/sous-catégorie/modèle — chaque fiche modèle a des
+# tableaux clé/valeur exploitables directement.
+# ─────────────────────────────────────────────────────────────────────────────
+
+KVERNELAND_HOME = "https://www.kverneland.com/"
+
+
+def _humanize_slug(slug: str) -> str:
+    return slug.replace("-", " ").strip().capitalize()
+
+
+def _kverneland_product_links(page: Page) -> set:
+    """Une fiche modèle Kverneland a toujours une URL à 3 segments :
+    /categorie/sous-categorie/modele. Les pages de catégorie/sous-catégorie
+    n'ont que 1 ou 2 segments, ce qui les exclut naturellement."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "kverneland.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 3:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Kverneland non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(KVERNELAND_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Kverneland inaccessible : {e}")
+        return machines
+
+    product_links = _kverneland_product_links(page)
+    log.info(f"  Kverneland → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        specs = {}
+        for table in page.query_selector_all("table"):
+            for row in table.query_selector_all("tr"):
+                cells = row.query_selector_all("td, th")
+                if len(cells) >= 2:
+                    k = clean(cells[0].inner_text())
+                    v = clean(cells[1].inner_text())
+                    if k and v:
+                        specs[k] = v
+
+        if not specs:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug, subcategory_slug = segments[0], segments[1]
+
+        m = Machine()
+        m.brand = "Kverneland"
+        m.name = specs.pop("Model", "") or clean(page.title())
+        m.category = _humanize_slug(category_slug)
+        m.subcategory = _humanize_slug(subcategory_slug)
+        m.sourceUrl = url
+        m.specs = json.dumps(specs, ensure_ascii=False)
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Claas (tracteurs) — claas.com
+# Structure : une page "gamme" (ex. Arion 400) contient un tableau où chaque
+# ligne est un modèle précis de la gamme (ex. 470 TREND, 460, 450 TREND...).
+# ─────────────────────────────────────────────────────────────────────────────
+
+CLAAS_TRACTEURS_URL = "https://www.claas.com/fr-fr/machines-agricoles/tracteurs"
+
+# Slugs qui ne sont pas des gammes de tracteurs mais des pages annexes
+CLAAS_EXCLUSIONS = [
+    "decouvrir-tous-les-tracteurs",
+    "assistance-connectivite",
+    "confort-de-conduite",
+    "efficacite-du-train",
+    "qualite-et-fiabilite",
+    "chargeurs-frontaux",
+    "first-claas-used",
+    "actions-commerciales",
+    "configurateur-produit",
+]
+
+
+def _claas_candidate_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "claas.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 4 and segments[:3] == ["fr-fr", "machines-agricoles", "tracteurs"]:
+            slug = segments[3]
+            if any(x in slug for x in CLAAS_EXCLUSIONS):
+                continue
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_claas(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les gammes de tracteurs Claas non encore présentes dans Neon.
+
+    Certaines pages regroupent seulement des liens vers d'autres gammes
+    (ex. "tracteurs compacts") au lieu d'un tableau de specs : dans ce cas
+    on explore aussi leurs liens plutôt que de les ignorer."""
+    machines = []
+    try:
+        page.goto(CLAAS_TRACTEURS_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Claas inaccessible : {e}")
+        return machines
+
+    to_visit = _claas_candidate_links(page)
+    visited = set()
+    log.info(f"  Claas → {len(to_visit)} gammes candidates trouvées")
+
+    while to_visit:
+        url = to_visit.pop()
+        if url in visited:
+            continue
+        visited.add(url)
+
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            # Page de regroupement plutôt qu'une gamme : on explore ses liens
+            to_visit |= (_claas_candidate_links(page) - visited)
+            continue
+
+        range_name = clean(page.title()).replace(" | CLAAS", "")
+        rows = tables[0].query_selector_all("tr")
+        if not rows:
+            continue
+        headers = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+
+        for row in rows[1:]:
+            cells = row.query_selector_all("td, th")
+            values = [clean(c.inner_text()) for c in cells]
+            if not values or not values[0]:
+                continue
+
+            specs = {
+                headers[i]: values[i]
+                for i in range(1, min(len(headers), len(values)))
+                if headers[i] and values[i]
+            }
+
+            m = Machine()
+            m.brand = "Claas"
+            m.range = range_name
+            m.name = values[0]
+            m.category = "Tracteurs"
+            m.sourceUrl = url
+            # Transmission différente = modèle différent malgré le même nom
+            transmission = next((v for k, v in specs.items() if "transmission" in k.lower()), "")
+            m.variant = transmission.split()[0] if transmission else ""
+            m.specs = json.dumps(specs, ensure_ascii=False)
+
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
+
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    ✓ {range_name} — {m.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def run() -> int:
     conn = db.get_connection()
     existing_keys = db.get_existing_keys(conn)
@@ -307,6 +514,24 @@ def run() -> int:
         for marque, liste_url in MARQUES.items():
             log.info(f"Marque : {marque}")
             machines = scrape_marque(page, marque, liste_url, existing_keys)
+            if machines:
+                ok, err = db.upsert_machines(conn, machines)
+                total_ok += ok
+                total_err += err
+                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
+            else:
+                log.info("  → aucune nouvelle machine")
+
+        for nom_source, scraper_fn in [
+            ("Kverneland", scrape_kverneland),
+            ("Claas (claas.com)", scrape_claas),
+        ]:
+            log.info(f"Source : {nom_source}")
+            try:
+                machines = scraper_fn(page, existing_keys)
+            except Exception as e:
+                log.error(f"  ❌ Échec {nom_source} : {e}")
+                continue
             if machines:
                 ok, err = db.upsert_machines(conn, machines)
                 total_ok += ok
