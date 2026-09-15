@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+*.xlsx
+machines_cache.json
+urls_scrapees.json
+venv/
+.venv/
