@@ -1,6 +1,6 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Explore la structure de quelques sites constructeurs pour préparer un futur scraper.
+Vérifie si des fiches produit précises contiennent des tableaux de specs exploitables.
 Ne touche pas à la base de données.
 """
 
@@ -12,9 +12,9 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 SITES = {
-    "Claas (tracteurs, URL corrigée)": "https://www.claas.com/fr-fr/machines-agricoles/tracteurs",
-    "Kverneland (page d'accueil)": "https://www.kverneland.com/",
-    "Horsch (catégorie semoirs)": "https://www.horsch.com/produkte/saemaschinen",
+    "Kverneland (fiche modèle 2300 S Variomat)": "https://ien.kverneland.com/ploughs/reversible-ploughs/kverneland-2300-s-variomat",
+    "Horsch (fiche modèle Pronto 6-7 DC)": "https://www.horsch.com/produkte/saemaschinen/scheibensaemaschinen/pronto-6-7-dc",
+    "Claas (fiche gamme Arion 400)": "https://www.claas.com/fr-fr/machines-agricoles/tracteurs/arion-400",
 }
 
 
@@ -24,32 +24,42 @@ def probe(name: str, url: str, page):
         resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
         log.info(f"HTTP status: {resp.status if resp else 'N/A'}")
         page.wait_for_timeout(5000)
-        page.mouse.wheel(0, 3000)
-        page.wait_for_timeout(2000)
+        for _ in range(5):
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(800)
         log.info(f"Titre : {page.title()}")
         log.info(f"URL finale : {page.url}")
 
         tables = page.query_selector_all("table")
         log.info(f"Nombre de <table> sur la page : {len(tables)}")
+        for i, t in enumerate(tables[:5]):
+            rows = t.query_selector_all("tr")
+            log.info(f"  Table {i}: {len(rows)} lignes")
+            if rows:
+                first_row_text = rows[0].inner_text().replace("\n", " | ")
+                log.info(f"    1ère ligne : {first_row_text[:150]}")
 
-        links = page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => ({href: e.href, text: e.textContent.trim()}))"
+        # Chercher aussi des blocs "dl/dt/dd" ou des divs avec spec/technical dans la classe
+        dls = page.query_selector_all("dl")
+        log.info(f"Nombre de <dl> sur la page : {len(dls)}")
+
+        spec_divs = page.query_selector_all(
+            "[class*='spec' i], [class*='technical' i], [class*='caracteristique' i]"
         )
-        final_domain = urlparse(page.url).netloc
-        root_domain = ".".join(final_domain.split(".")[-2:])  # ex: claas.com
-        internal = [l for l in links if root_domain in l["href"] and l["text"]]
-        seen = set()
-        uniq = []
-        for l in internal:
-            if l["href"] not in seen:
-                seen.add(l["href"])
-                uniq.append(l)
+        log.info(f"Nombre d'éléments avec classe contenant spec/technical/caracteristique : {len(spec_divs)}")
+        for d in spec_divs[:3]:
+            txt = d.inner_text().strip().replace("\n", " | ")
+            if txt:
+                log.info(f"    échantillon : {txt[:200]}")
 
-        log.info(f"Domaine racine utilisé pour filtrer : {root_domain}")
-        log.info(f"Liens internes uniques trouvés : {len(uniq)} (échantillon des 50 premiers)")
-        for l in uniq[:50]:
-            log.info(f"  [{l['text'][:50]:50}] {l['href']}")
+        # Chercher des liens PDF (brochure/fiche technique)
+        pdf_links = page.eval_on_selector_all(
+            "a[href*='.pdf' i]",
+            "els => els.map(e => e.href)"
+        )
+        log.info(f"Liens PDF trouvés : {len(pdf_links)}")
+        for p in pdf_links[:5]:
+            log.info(f"    {p}")
 
     except Exception as e:
         log.error(f"Erreur sur {name} : {e}")
