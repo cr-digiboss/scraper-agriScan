@@ -74,7 +74,10 @@ def upsert_machines(conn, machines) -> tuple[int, int]:
                 })
                 ok += 1
             except Exception as e:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass  # connexion déjà perdue (ex. timeout Neon) : rien à annuler
                 errors += 1
                 log.warning(f"  Erreur upsert {m.brand} {m.name} : {e}")
     conn.commit()

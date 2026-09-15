@@ -299,6 +299,31 @@ def _humanize_slug(slug: str) -> str:
     return slug.replace("-", " ").strip().capitalize()
 
 
+def _clean_kverneland_title(raw_title: str) -> str:
+    """Nettoie un <title> de page Kverneland pour n'en garder que le nom du modèle.
+
+    Le <title> mélange nom de produit et accroche marketing, dans un ordre
+    incohérent selon les pages :
+      "Kverneland 6500F FW Baler-Wrapper Combo | Efficient Bale & Wrap"
+      "Rigid coulterbar to complement f-drill model range... | Kverneland f-drill CB"
+      "Kverneland FHP - Kverneland"
+    On garde la partie qui commence par "Kverneland" (ou la plus courte à
+    défaut), puis on retire les mentions de la marque en trop.
+    """
+    parts = [p.strip() for p in raw_title.split("|") if p.strip()]
+    if not parts:
+        return clean(raw_title)
+
+    kverneland_parts = [p for p in parts if p.lower().startswith("kverneland")]
+    chosen = kverneland_parts[0] if kverneland_parts else min(parts, key=len)
+
+    if chosen.lower().startswith("kverneland"):
+        chosen = chosen[len("kverneland"):].strip()
+    chosen = re.sub(r"\s*-\s*Kverneland\s*$", "", chosen, flags=re.I)
+
+    return clean(chosen)
+
+
 def _kverneland_product_links(page: Page) -> set:
     """Une fiche modèle Kverneland a toujours une URL à 3 segments :
     /categorie/sous-categorie/modele. Les pages de catégorie/sous-catégorie
@@ -354,7 +379,7 @@ def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
 
         m = Machine()
         m.brand = "Kverneland"
-        m.name = specs.pop("Model", "") or clean(page.title())
+        m.name = specs.pop("Model", "") or _clean_kverneland_title(page.title())
         m.category = _humanize_slug(category_slug)
         m.subcategory = _humanize_slug(subcategory_slug)
         m.sourceUrl = url
@@ -492,9 +517,25 @@ def scrape_claas(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+def _upsert(machines: list[Machine]) -> tuple[int, int]:
+    """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
+
+    Le scraping d'une seule marque/source peut prendre plusieurs minutes ;
+    garder une connexion PostgreSQL ouverte pendant tout ce temps la fait
+    couper par Neon (timeout d'inactivité). Une connexion courte par lot
+    évite complètement le problème.
+    """
+    conn = db.get_connection()
+    try:
+        return db.upsert_machines(conn, machines)
+    finally:
+        conn.close()
+
+
 def run() -> int:
     conn = db.get_connection()
     existing_keys = db.get_existing_keys(conn)
+    conn.close()
     log.info(f"Neon : {len(existing_keys)} machines déjà en base")
 
     total_ok, total_err = 0, 0
@@ -524,7 +565,7 @@ def run() -> int:
                 log.error(f"  ❌ Échec {nom_source} : {e}")
                 continue
             if machines:
-                ok, err = db.upsert_machines(conn, machines)
+                ok, err = _upsert(machines)
                 total_ok += ok
                 total_err += err
                 log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
@@ -535,7 +576,7 @@ def run() -> int:
             log.info(f"Marque : {marque}")
             machines = scrape_marque(page, marque, liste_url, existing_keys)
             if machines:
-                ok, err = db.upsert_machines(conn, machines)
+                ok, err = _upsert(machines)
                 total_ok += ok
                 total_err += err
                 log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
@@ -544,7 +585,6 @@ def run() -> int:
 
         browser.close()
 
-    conn.close()
     log.info(f"Terminé : {total_ok} machines enregistrées au total, {total_err} erreurs")
     return total_ok
 
