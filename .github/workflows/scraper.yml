@@ -1,0 +1,16 @@
+name: Scraper AgriScan
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # chaque nuit à 2h
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+      - run: pip install -r requirements.txt
+      - run: python scraper.py
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}  # ta connexion Neon
