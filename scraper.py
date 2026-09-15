@@ -511,17 +511,8 @@ def run() -> int:
         )
         page = context.new_page()
 
-        for marque, liste_url in MARQUES.items():
-            log.info(f"Marque : {marque}")
-            machines = scrape_marque(page, marque, liste_url, existing_keys)
-            if machines:
-                ok, err = db.upsert_machines(conn, machines)
-                total_ok += ok
-                total_err += err
-                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
-            else:
-                log.info("  → aucune nouvelle machine")
-
+        # Sources légères en premier (catalogue complet en quelques minutes),
+        # TractorData en dernier car son crawl de 12 marques est le plus long.
         for nom_source, scraper_fn in [
             ("Kverneland", scrape_kverneland),
             ("Claas (claas.com)", scrape_claas),
@@ -532,6 +523,17 @@ def run() -> int:
             except Exception as e:
                 log.error(f"  ❌ Échec {nom_source} : {e}")
                 continue
+            if machines:
+                ok, err = db.upsert_machines(conn, machines)
+                total_ok += ok
+                total_err += err
+                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
+            else:
+                log.info("  → aucune nouvelle machine")
+
+        for marque, liste_url in MARQUES.items():
+            log.info(f"Marque : {marque}")
+            machines = scrape_marque(page, marque, liste_url, existing_keys)
             if machines:
                 ok, err = db.upsert_machines(conn, machines)
                 total_ok += ok
