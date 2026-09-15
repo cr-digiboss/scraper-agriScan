@@ -492,9 +492,25 @@ def scrape_claas(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+def _upsert(machines: list[Machine]) -> tuple[int, int]:
+    """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
+
+    Le scraping d'une seule marque/source peut prendre plusieurs minutes ;
+    garder une connexion PostgreSQL ouverte pendant tout ce temps la fait
+    couper par Neon (timeout d'inactivité). Une connexion courte par lot
+    évite complètement le problème.
+    """
+    conn = db.get_connection()
+    try:
+        return db.upsert_machines(conn, machines)
+    finally:
+        conn.close()
+
+
 def run() -> int:
     conn = db.get_connection()
     existing_keys = db.get_existing_keys(conn)
+    conn.close()
     log.info(f"Neon : {len(existing_keys)} machines déjà en base")
 
     total_ok, total_err = 0, 0
@@ -524,7 +540,7 @@ def run() -> int:
                 log.error(f"  ❌ Échec {nom_source} : {e}")
                 continue
             if machines:
-                ok, err = db.upsert_machines(conn, machines)
+                ok, err = _upsert(machines)
                 total_ok += ok
                 total_err += err
                 log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
@@ -535,7 +551,7 @@ def run() -> int:
             log.info(f"Marque : {marque}")
             machines = scrape_marque(page, marque, liste_url, existing_keys)
             if machines:
-                ok, err = db.upsert_machines(conn, machines)
+                ok, err = _upsert(machines)
                 total_ok += ok
                 total_err += err
                 log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
@@ -544,7 +560,6 @@ def run() -> int:
 
         browser.close()
 
-    conn.close()
     log.info(f"Terminé : {total_ok} machines enregistrées au total, {total_err} erreurs")
     return total_ok
 
