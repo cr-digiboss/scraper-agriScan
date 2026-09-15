@@ -35,21 +35,26 @@ UPSERT_SQL = """
     INSERT INTO "Machine" (
         id, brand, range, name, variant,
         category, subcategory, description,
-        specs, "imageUrl", "videoUrl", "sourceUrl", "createdAt"
+        specs, "imageUrl", "videoUrl", "sourceUrl",
+        statut, "anneeDebut", "anneeFin", "createdAt"
     ) VALUES (
         gen_random_uuid()::text,
         %(brand)s, %(range)s, %(name)s, %(variant)s,
         %(category)s, %(subcategory)s, %(description)s,
-        %(specs)s::jsonb, %(imageUrl)s, %(videoUrl)s, %(sourceUrl)s, NOW()
+        %(specs)s::jsonb, %(imageUrl)s, %(videoUrl)s, %(sourceUrl)s,
+        %(statut)s, %(anneeDebut)s, %(anneeFin)s, NOW()
     )
     ON CONFLICT (brand, name, variant) DO UPDATE SET
-        range       = EXCLUDED.range,
-        category    = EXCLUDED.category,
-        subcategory = EXCLUDED.subcategory,
-        description = EXCLUDED.description,
-        specs       = EXCLUDED.specs,
-        "imageUrl"  = EXCLUDED."imageUrl",
-        "sourceUrl" = EXCLUDED."sourceUrl"
+        range        = EXCLUDED.range,
+        category     = EXCLUDED.category,
+        subcategory  = EXCLUDED.subcategory,
+        description  = EXCLUDED.description,
+        specs        = EXCLUDED.specs,
+        "imageUrl"   = EXCLUDED."imageUrl",
+        "sourceUrl"  = EXCLUDED."sourceUrl",
+        statut       = EXCLUDED.statut,
+        "anneeDebut" = EXCLUDED."anneeDebut",
+        "anneeFin"   = EXCLUDED."anneeFin"
 """
 
 
@@ -71,6 +76,9 @@ def upsert_machines(conn, machines) -> tuple[int, int]:
                     "imageUrl": m.imageUrl or None,
                     "videoUrl": m.videoUrl or None,
                     "sourceUrl": m.sourceUrl or None,
+                    "statut": m.statut or "active",
+                    "anneeDebut": int(m.anneeDebut) if m.anneeDebut else None,
+                    "anneeFin": int(m.anneeFin) if m.anneeFin else None,
                 })
                 ok += 1
             except Exception as e:
