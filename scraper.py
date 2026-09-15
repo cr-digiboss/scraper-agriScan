@@ -1,249 +1,326 @@
-import os
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 """
-AgriScan Scraper — Point d'entrée principal
-Lance tous les scrapers et génère l'Excel global.
+AgriScan Scraper — point d'entrée unique
+Récupère les fiches tracteurs sur TractorData.com et met à jour la base Neon.
 
 Usage :
-    python scraper.py              → scrape toutes les marques activées
-    python export_excel.py         → scrape + génère l'Excel
+    python scraper.py
 """
 
-from playwright.sync_api import sync_playwright
-from scrapers.base import Machine
-from scrapers import tractordata
+import os
+import re
+import json
+import time
+import random
 import logging
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright, Page
+from bs4 import BeautifulSoup
+
+import db
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("agriscan")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Active / désactive chaque marque ici
-# ─────────────────────────────────────────────────────────────────────────────
+BASE = "https://www.tractordata.com"
 
-SCRAPERS = [
-    ("Tractordata", tractordata, True),   # ✅ validé
-]
+# Marques scrapées → page listant tous les modèles de la marque.
+# Pour ajouter une marque : trouver sa page "tractor-brands" sur tractordata.com et l'ajouter ici.
+MARQUES = {
+    # "John Deere":    f"{BASE}/farm-tractors/tractor-brands/johndeere/johndeere-tractors.html",  # désactivé : catalogue trop volumineux
+    "Massey Ferguson": f"{BASE}/farm-tractors/tractor-brands/massey-ferguson/massey-ferguson-tractors.html",
+    "New Holland":     f"{BASE}/farm-tractors/tractor-brands/newholland/newholland-tractors.html",
+    "Case IH":         f"{BASE}/farm-tractors/tractor-brands/caseih/caseih-tractors.html",
+    "Kubota":          f"{BASE}/farm-tractors/tractor-brands/kubota/kubota-tractors.html",
+    "Ford":            f"{BASE}/farm-tractors/tractor-brands/ford/ford-tractors.html",
+    "Fendt":           f"{BASE}/farm-tractors/tractor-brands/fendt/fendt-tractors.html",
+    "Claas":           f"{BASE}/farm-tractors/tractor-brands/claas/claas-tractors.html",
+    "Deutz-Fahr":      f"{BASE}/farm-tractors/tractor-brands/deutz/deutz-tractors.html",
+    "Allis-Chalmers":  f"{BASE}/farm-tractors/tractor-brands/allischalmers/allischalmers-tractors.html",
+    "International":   f"{BASE}/farm-tractors/tractor-brands/ih/ih-tractors.html",
+    "Fiat":            f"{BASE}/farm-tractors/tractor-brands/fiat/fiat-tractors.html",
+    "Mahindra":        f"{BASE}/farm-tractors/tractor-brands/mahindra/mahindra-tractors.html",
+}
+
+ONGLETS = ["Engine", "Transmission", "Dimensions"]
+ANNEE_ANCETRE = 1980
+ANNEE_VINTAGE = 2000
+
+# Traduction des libellés de specs anglais → français
+SPECS_TRADUCTIONS = {
+    # Moteur
+    "Displacement":             "Cylindrée",
+    "Engine displacement":      "Cylindrée",
+    "Bore/Stroke":              "Alésage/Course",
+    "Bore stroke":              "Alésage/Course",
+    "Rated RPM":                "Régime nominal",
+    "Engine RPM":               "Régime moteur",
+    "Rated Power (gross)":      "Puissance brute",
+    "Rated Power (net)":        "Puissance nette",
+    "Engine Power":             "Puissance moteur",
+    "Power":                    "Puissance",
+    "PTO Power":                "Puissance PDF",
+    "Drawbar Power":            "Puissance à la barre",
+    "Horsepower":               "Puissance (ch)",
+    "Torque":                   "Couple",
+    "Torque RPM":               "Régime couple max",
+    "Air cleaner":              "Filtre à air",
+    "Starter volts":            "Tension démarreur",
+    "Starter":                  "Démarreur",
+    "Firing order":             "Ordre allumage",
+    "Coolant capacity":         "Capacité refroidissement",
+    "Compression":              "Taux de compression",
+    "Compression ratio":        "Taux de compression",
+    "Fuel":                     "Carburant",
+    "Fuel type":                "Type carburant",
+    "Fuel capacity":            "Capacité réservoir",
+    "Emissions":                "Norme émissions",
+    "Engine make":              "Fabricant moteur",
+    "Engine model":             "Modèle moteur",
+    "Cylinders":                "Nombre cylindres",
+    "Aspiration":               "Aspiration",
+    "Turbo":                    "Turbo",
+    # Transmission
+    "Type":                     "Type transmission",
+    "Transmission":             "Transmission",
+    "Gears":                    "Rapports",
+    "Speeds":                   "Vitesses",
+    "Clutch":                   "Embrayage",
+    "Oil capacity":             "Capacité huile",
+    "Differential lock":        "Blocage différentiel",
+    "Four wheel drive":         "4 roues motrices",
+    "Front axle":               "Pont avant",
+    # Dimensions & poids
+    "Wheelbase":                "Empattement",
+    "Length":                   "Longueur",
+    "Width":                    "Largeur",
+    "Height":                   "Hauteur",
+    "Operating weight":         "Poids en ordre de marche",
+    "Weight":                   "Poids",
+    "Ballasted weight":         "Poids lesté",
+    "Front tread":              "Voie avant",
+    "Rear tread":               "Voie arrière",
+    "Ground clearance":         "Garde au sol",
+    "Turning radius":           "Rayon de braquage",
+    # Pneumatiques
+    "Ag front":                 "Pneus avant",
+    "Ag rear":                  "Pneus arrière",
+    "Front tire":               "Pneu avant",
+    "Rear tire":                "Pneu arrière",
+    "Tire size front":          "Dimension pneu avant",
+    "Tire size rear":           "Dimension pneu arrière",
+    # Hydraulique & relevage
+    "Rear lift":                "Capacité relevage arrière",
+    "Front lift":               "Capacité relevage avant",
+    "Lift capacity":            "Capacité relevage",
+    "Pump flow":                "Débit pompe hydraulique",
+    "Hydraulic system":         "Système hydraulique",
+    "Steering":                 "Direction",
+    "Hydraulic pressure":       "Pression hydraulique",
+    # Électrique
+    "Electrical":               "Système électrique",
+    "Battery":                  "Batterie",
+    "Alternator":               "Alternateur",
+    # Divers
+    "Cab":                      "Cabine",
+    "ROPS":                     "Arceau de sécurité",
+    "Air conditioning":         "Climatisation",
+    "Year":                     "Année",
+    "Production":               "Période de production",
+    "Series":                   "Série",
+    "Type (tractor)":           "Type de tracteur",
+}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+@dataclass
+class Machine:
+    brand: str = ""
+    range: str = ""
+    name: str = ""
+    variant: str = ""
+    category: str = ""
+    subcategory: str = ""
+    description: str = ""
+    specs: str = ""
+    imageUrl: str = ""
+    videoUrl: str = ""
+    sourceUrl: str = ""
 
-CACHE_FILE = "urls_scrapees.json"
-MACHINES_FILE = "machines_cache.json"
 
-def _load_cache() -> set:
-    """Charge les URLs déjà scrapées."""
-    import json, os
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
+def clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
 
-def _save_cache(urls: set):
-    """Sauvegarde les URLs scrapées."""
-    import json
-    with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(urls), f, ensure_ascii=False, indent=2)
-    log.info(f"💾 Cache URLs sauvegardé : {len(urls)} URLs")
 
-def _load_machines_cache() -> list[Machine]:
-    """Charge les machines déjà scrapées."""
-    import json, os
-    from dataclasses import fields
-    if os.path.exists(MACHINES_FILE):
-        with open(MACHINES_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        machines = []
-        for d in data:
-            m = Machine()
-            for k, v in d.items():
-                if hasattr(m, k):
-                    setattr(m, k, v)
-            machines.append(m)
-        log.info(f"📋 {len(machines)} machines chargées depuis le cache")
+def extract_year(text: str) -> str:
+    m = re.search(r"\b(19[0-9]\d|20[012]\d)\b", text)
+    return m.group() if m else ""
+
+
+def traduire_specs(specs: dict) -> dict:
+    """Traduit les clés des specs en français quand une correspondance existe."""
+    result = {}
+    for k, v in specs.items():
+        if k in SPECS_TRADUCTIONS:
+            result[SPECS_TRADUCTIONS[k]] = v
+            continue
+        k_lower = k.lower()
+        for eng, fr in SPECS_TRADUCTIONS.items():
+            if eng.lower() == k_lower:
+                result[fr] = v
+                break
+        else:
+            result[k] = v
+    return result
+
+
+def _badge(annee: str) -> str:
+    try:
+        a = int(annee[:4]) if annee else 0
+        if a and a < ANNEE_ANCETRE:
+            return "Ancêtre"
+        if a and a < ANNEE_VINTAGE:
+            return "Vintage"
+    except (ValueError, TypeError):
+        pass
+    return ""
+
+
+def _extraire_specs(page: Page) -> dict:
+    """Clique sur chaque onglet de la fiche technique et récupère les tableaux de specs."""
+    specs = {}
+    for onglet in ONGLETS:
+        try:
+            page.click(f"text={onglet}", timeout=3000)
+            time.sleep(1.5)
+            soup = BeautifulSoup(page.content(), "html.parser")
+            for table in soup.find_all("table"):
+                for row in table.find_all("tr"):
+                    cells = row.find_all(["td", "th"])
+                    if len(cells) >= 2:
+                        k = clean(cells[0].get_text())
+                        v = clean(cells[1].get_text())
+                        if k and v and k != "x" and "x" not in k and len(k) > 2:
+                            specs[k] = v
+        except Exception:
+            pass
+    return specs
+
+
+def _extraire_puissance(specs: dict, text: str) -> str:
+    for k, v in specs.items():
+        if any(x in k.lower() for x in ["power", "hp", "pto", "engine"]):
+            m = re.search(r"(\d+\.?\d*)\s*hp", v, re.I)
+            if m:
+                return str(round(float(m.group(1)) * 0.7355))
+    m = re.search(r"(\d+\.?\d*)\s*hp", text, re.I)
+    if m:
+        return str(round(float(m.group(1)) * 0.7355))
+    return ""
+
+
+def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -> list[Machine]:
+    """Scrape les modèles d'une marque non encore présents dans Neon."""
+    machines = []
+    try:
+        page.goto(liste_url, timeout=60000, wait_until="domcontentloaded")
+        time.sleep(2)
+    except Exception as e:
+        log.warning(f"  {marque} inaccessible : {e}")
         return machines
-    return []
 
-def _save_machines_cache(machines: list[Machine]):
-    """Sauvegarde toutes les machines dans le cache."""
-    import json
-    from dataclasses import asdict
-    with open(MACHINES_FILE, "w", encoding="utf-8") as f:
-        json.dump([asdict(m) for m in machines], f, ensure_ascii=False, indent=2)
-    log.info(f"💾 Cache machines sauvegardé : {len(machines)} machines")
+    soup_liste = BeautifulSoup(page.content(), "html.parser")
+    model_links = set()
+    for a in soup_liste.find_all("a", href=True):
+        href = a["href"]
+        if not href.startswith("http"):
+            href = BASE + href
+        if "/farm-tractors/" in href and href.endswith(".html") and "tractor-brands" not in href:
+            model_links.add(href)
 
-def run_all() -> list[Machine]:
-    # Charger les machines déjà scrapées
-    all_machines = _load_machines_cache()
-    already_done = _load_cache()
-    if already_done:
-        log.info(f"⏭️  {len(already_done)} URLs déjà scrapées — seules les nouvelles seront visitées")
+    log.info(f"  {marque} → {len(model_links)} modèles trouvés sur le site")
+
+    for i, url in enumerate(sorted(model_links), 1):
+        try:
+            page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            time.sleep(random.uniform(1.5, 2.5))
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        soup_m = BeautifulSoup(page.content(), "html.parser")
+        m = Machine(brand=marque, category="Tracteurs", sourceUrl=url)
+
+        h1 = soup_m.find("h1")
+        if h1:
+            titre = clean(h1.get_text())
+            m.name = titre[len(marque):].strip() if titre.lower().startswith(marque.lower()) else titre
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        page_text = soup_m.get_text()
+        m.variant = extract_year(page_text)
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        specs = _extraire_specs(page)
+        cv = _extraire_puissance(specs, page_text)
+        badge = _badge(m.variant)
+
+        specs = traduire_specs(specs)
+        specs["puissance_cv"] = cv
+        specs["annee"] = m.variant
+        specs["badge"] = badge
+        m.specs = json.dumps(specs, ensure_ascii=False)
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(model_links)}] ✓ {m.name} {m.variant}{f' — {badge}' if badge else ''}")
+
+    return machines
+
+
+def run() -> int:
+    conn = db.get_connection()
+    existing_keys = db.get_existing_keys(conn)
+    log.info(f"Neon : {len(existing_keys)} machines déjà en base")
+
+    total_ok, total_err = 0, 0
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            ),
             viewport={"width": 1280, "height": 800},
             locale="fr-FR",
-            extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8"},
         )
         page = context.new_page()
 
-        for name, module, enabled in SCRAPERS:
-            if not enabled:
-                log.info(f"⏭️  {name} — désactivé")
-                continue
-            try:
-                results = module.scrape(page, already_done=already_done)
-                all_machines.extend(results)
-                # Ajouter les nouvelles URLs au cache
-                for m in results:
-                    if m.url_source:
-                        already_done.add(m.url_source)
-                log.info(f"✅ {name} : {len(results)} nouvelles machines")
-            except Exception as e:
-                log.error(f"❌ Échec {name} : {e}")
+        for marque, liste_url in MARQUES.items():
+            log.info(f"Marque : {marque}")
+            machines = scrape_marque(page, marque, liste_url, existing_keys)
+            if machines:
+                ok, err = db.upsert_machines(conn, machines)
+                total_ok += ok
+                total_err += err
+                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
+            else:
+                log.info("  → aucune nouvelle machine")
 
         browser.close()
 
-    # Normaliser les catégories vers les catégories officielles AgriScan
-    from scrapers.categories import normaliser_categorie
-    for m in all_machines:
-        if hasattr(m, "category"):
-            m.category = normaliser_categorie(m.category)
-        elif hasattr(m, "categorie"):
-            m.category = normaliser_categorie(m.categorie)
-
-    # Dédoublonner sur marque + modèle (garder la première occurrence)
-    seen = set()
-    deduped = []
-    for m in all_machines:
-        brand = getattr(m, 'brand', '') or getattr(m, 'marque', '') or ''
-        name = getattr(m, 'name', '') or getattr(m, 'modele', '') or ''
-        variant = getattr(m, 'variant', '') or ''
-        key = f"{brand.lower().strip()}|{name.lower().strip()}|{variant.lower().strip()}"
-        if key not in seen:
-            seen.add(key)
-            deduped.append(m)
-    doublons = len(all_machines) - len(deduped)
-    if doublons:
-        log.info(f"🧹 {doublons} doublons supprimés → {len(deduped)} machines uniques")
-    all_machines = deduped
-
-    _save_cache(already_done)
-    # Sauvegarder seulement si on a plus de machines que avant
-    cached = _load_machines_cache()
-    if len(all_machines) >= len(cached):
-        _save_machines_cache(all_machines)
-        nouvelles = len(all_machines) - len(cached)
-        log.info(f"\n🎯 Total : {len(all_machines)} machines ({nouvelles} nouvelles)")
-    else:
-        log.warning(f"⚠️  Cache non écrasé")
-
-    # Insérer directement dans Neon si DATABASE_URL disponible
-    db_url = os.getenv("DATABASE_URL")
-    if db_url and all_machines:
-        # Charger les machines existantes depuis Neon pour éviter les doublons
-        existing_neon = _load_existing_neon(db_url)
-        if existing_neon:
-            avant = len(all_machines)
-            all_machines = [
-                m for m in all_machines
-                if f"{getattr(m, 'brand', '')}|{getattr(m, 'name', '')}|{getattr(m, 'variant', '')}" not in existing_neon
-            ]
-            log.info(f"🔍 {avant - len(all_machines)} machines déjà dans Neon ignorées → {len(all_machines)} nouvelles à insérer")
-        _insert_neon(all_machines, db_url)
-
-    return all_machines
-
-
-def _load_existing_neon(db_url: str) -> set:
-    """Charge les combinaisons brand+name+variant déjà dans Neon."""
-    import psycopg2
-    try:
-        conn = psycopg2.connect(db_url)
-        cursor = conn.cursor()
-        cursor.execute('SELECT brand, name, variant FROM "Machine"')
-        existing = {f"{r[0]}|{r[1]}|{r[2]}" for r in cursor.fetchall()}
-        cursor.close()
-        conn.close()
-        log.info(f"📊 Neon : {len(existing)} machines existantes chargées")
-        return existing
-    except Exception as e:
-        log.error(f"❌ Impossible de charger Neon : {e}")
-        return set()
-
-def _insert_neon(machines: list[Machine], db_url: str):
-    """Insère les machines directement dans Neon avec ON CONFLICT."""
-    import psycopg2
-    from dataclasses import asdict
-
-    INSERT_SQL = """
-        INSERT INTO "Machine" (
-            id, brand, range, name, variant,
-            category, subcategory, description,
-            specs, "imageUrl", "videoUrl", "sourceUrl", "createdAt"
-        ) VALUES (
-            gen_random_uuid()::text,
-            %(brand)s, %(range)s, %(name)s, %(variant)s,
-            %(category)s, %(subcategory)s, %(description)s,
-            %(specs)s::jsonb, %(imageUrl)s, %(videoUrl)s, %(sourceUrl)s, NOW()
-        )
-        ON CONFLICT (brand, name, variant) DO UPDATE SET
-            range       = EXCLUDED.range,
-            category    = EXCLUDED.category,
-            subcategory = EXCLUDED.subcategory,
-            description = EXCLUDED.description,
-            specs       = EXCLUDED.specs,
-            "imageUrl"  = EXCLUDED."imageUrl",
-            "sourceUrl" = EXCLUDED."sourceUrl"
-    """
-
-    try:
-        conn = psycopg2.connect(db_url)
-        cursor = conn.cursor()
-        inseres = 0
-        erreurs = 0
-
-        for m in machines:
-            try:
-                import json as _json
-                specs = m.specs or "{}"
-                if isinstance(specs, dict):
-                    specs = _json.dumps(specs, ensure_ascii=False)
-
-                cursor.execute(INSERT_SQL, {
-                    "brand":       (m.brand or "")[:255],
-                    "range":       m.range or None,
-                    "name":        (m.name or "")[:255],
-                    "variant":     m.variant or "",
-                    "category":    (m.category or "")[:255],
-                    "subcategory": m.subcategory or None,
-                    "description": m.description or None,
-                    "specs":       specs,
-                    "imageUrl":    m.imageUrl or None,
-                    "videoUrl":    m.videoUrl or None,
-                    "sourceUrl":   m.sourceUrl or None,
-                })
-                inseres += 1
-            except Exception as e:
-                conn.rollback()
-                erreurs += 1
-
-            if inseres % 100 == 0 and inseres > 0:
-                conn.commit()
-                log.info(f"  💾 Neon : {inseres} insérées, {erreurs} erreurs")
-
-        conn.commit()
-        cursor.close()
-        conn.close()
-        log.info(f"✅ Neon : {inseres} machines insérées/mises à jour, {erreurs} erreurs")
-
-    except Exception as e:
-        log.error(f"❌ Connexion Neon échouée : {e}")
+    conn.close()
+    log.info(f"Terminé : {total_ok} machines enregistrées au total, {total_err} erreurs")
+    return total_ok
 
 
 if __name__ == "__main__":
-    machines = run_all()
-    print(f"\nRésultat : {len(machines)} machines collectées")
+    run()
