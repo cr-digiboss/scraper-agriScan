@@ -13,6 +13,7 @@ import time
 import random
 import logging
 from dataclasses import dataclass
+from datetime import date
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
@@ -159,6 +160,9 @@ class Machine:
     imageUrl: str = ""
     videoUrl: str = ""
     sourceUrl: str = ""
+    statut: str = ""       # "active" | "discontinued" ; vide = défaut de la table ("active")
+    anneeDebut: str = ""
+    anneeFin: str = ""
 
 
 def clean(text: str) -> str:
@@ -168,6 +172,22 @@ def clean(text: str) -> str:
 def extract_year(text: str) -> str:
     m = re.search(r"\b(19[0-9]\d|20[012]\d)\b", text)
     return m.group() if m else ""
+
+
+def parse_production(valeur: str) -> tuple[str, str]:
+    """Extrait une plage d'années depuis le champ "Production" de TractorData
+    (ex. "1985 - 1992", "1965-", "2015 - present"). Retourne (anneeDebut,
+    anneeFin) ; anneeFin vide si la production semble toujours en cours ou
+    si on ne peut pas la déterminer — on ne devine jamais un statut à tort."""
+    if not valeur:
+        return "", ""
+    annees = re.findall(r"\b(19[0-9]\d|20[0-2]\d)\b", valeur)
+    en_cours = bool(re.search(r"present|current|date|aujourd", valeur, re.I))
+    if len(annees) >= 2:
+        return min(annees), max(annees)
+    if len(annees) == 1:
+        return (annees[0], "") if en_cours else (annees[0], annees[0])
+    return "", ""
 
 
 def traduire_specs(specs: dict) -> dict:
@@ -407,6 +427,12 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
         cv = _extraire_puissance(specs, page_text)
         badge = _badge(m.variant)
 
+        m.anneeDebut, m.anneeFin = parse_production(specs.get("Production", ""))
+        if m.anneeFin:
+            m.statut = "discontinued" if int(m.anneeFin) < date.today().year else "active"
+        elif m.anneeDebut:
+            m.statut = "active"
+
         specs = traduire_specs(specs)
         specs["puissance_cv"] = cv
         specs["annee"] = m.variant
@@ -518,6 +544,8 @@ def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
         m.subcategory = _humanize_slug(subcategory_slug)
         m.sourceUrl = url
         m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        # Catalogue constructeur actuel : tout ce qu'on y trouve est en vente aujourd'hui
+        m.statut = "active"
 
         if not m.name or len(m.name) < 2:
             continue
@@ -633,6 +661,8 @@ def scrape_claas(page: Page, existing_keys: set) -> list[Machine]:
             m.name = values[0]
             m.category = "Tracteurs"
             m.sourceUrl = url
+            # Catalogue constructeur actuel : tout ce qu'on y trouve est en vente aujourd'hui
+            m.statut = "active"
             # Transmission différente = modèle différent malgré le même nom
             transmission = next((v for k, v in specs.items() if "transmission" in k.lower()), "")
             m.variant = transmission.split()[0] if transmission else ""
