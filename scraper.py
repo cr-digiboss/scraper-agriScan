@@ -360,7 +360,15 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
         href = a["href"]
         if not href.startswith("http"):
             href = BASE + href
-        if "/farm-tractors/" in href and href.endswith(".html") and "tractor-brands" not in href:
+        # Une vraie fiche modèle a toujours un dossier numérique juste après
+        # /farm-tractors/ (ex. /farm-tractors/000/0/3/35-john-deere-50.html).
+        # Sans ça on récupère aussi des pages de navigation comme
+        # /farm-tractors/index.html, scrapées à tort comme un "modèle".
+        if (
+            href.endswith(".html")
+            and "tractor-brands" not in href
+            and re.search(r"/farm-tractors/\d+/", href)
+        ):
             model_links.add(href)
 
     log.info(f"  {marque} → {len(model_links)} modèles trouvés sur le site")
@@ -379,7 +387,11 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
         h1 = soup_m.find("h1")
         if h1:
             titre = clean(h1.get_text())
-            m.name = titre[len(marque):].strip() if titre.lower().startswith(marque.lower()) else titre
+            # Une vraie fiche modèle commence toujours par le nom de la marque
+            # (ex. "Massey Ferguson 165"). Sinon, ce n'est probablement pas
+            # une fiche modèle valide (page de navigation, erreur...).
+            if titre.lower().startswith(marque.lower()):
+                m.name = titre[len(marque):].strip()
 
         if not m.name or len(m.name) < 2:
             continue
