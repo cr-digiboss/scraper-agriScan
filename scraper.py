@@ -133,6 +133,16 @@ SPECS_TRADUCTIONS = {
     "Production":               "Période de production",
     "Series":                   "Série",
     "Type (tractor)":           "Type de tracteur",
+    # Kverneland (charrues, presses, etc.)
+    "Working width cm":         "Largeur de travail (cm)",
+    "Interbody clearance cm":   "Dégagement entre corps (cm)",
+    "Underbeam clearance cm":   "Dégagement sous poutre (cm)",
+    "Head- stock":              "Attelage",
+    "Headstock":                "Attelage",
+    "Leg protection":           "Protection des éléments",
+    "No. of furrows":           "Nombre de corps",
+    "Leaf springs":             "Ressorts lame",
+    "Release Pressure kN":      "Pression de déclenchement (kN)",
 }
 
 
@@ -175,6 +185,118 @@ def traduire_specs(specs: dict) -> dict:
         else:
             result[k] = v
     return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Normalisation des catégories — appliquée à toutes les sources pour que le
+# catalogue reste cohérent quel que soit le site d'origine (slug d'URL anglais
+# chez Kverneland, catégorie déjà fixée chez TractorData/Claas, etc.)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Mot-clé (anglais ou français, en minuscules) → catégorie officielle AgriScan.
+# Le premier mot-clé trouvé dans le texte l'emporte : l'ordre compte pour les
+# cas ambigus (ex. "disc harrow" doit matcher avant le "harrow" générique).
+CATEGORIE_MOTS_CLES = [
+    ("tractor", "Tracteurs"),
+    ("tracteur", "Tracteurs"),
+    ("combine", "Moissonneuses"),
+    ("moissonneuse", "Moissonneuses"),
+    ("forage harvester", "Ensileuses"),
+    ("ensileuse", "Ensileuses"),
+    ("plough", "Charrues"),
+    ("plow", "Charrues"),
+    ("charrue", "Charrues"),
+    ("disc harrow", "Déchaumeurs"),
+    ("dechaumeur", "Déchaumeurs"),
+    ("déchaumeur", "Déchaumeurs"),
+    ("cultivator", "Déchaumeurs"),
+    ("power harrow", "Travail du sol"),
+    ("harrow", "Travail du sol"),
+    ("herse", "Travail du sol"),
+    ("roller", "Travail du sol"),
+    ("rouleau", "Travail du sol"),
+    ("subsoiler", "Travail du sol"),
+    ("tillage", "Travail du sol"),
+    ("seed drill", "Semoirs"),
+    ("seeder", "Semoirs"),
+    ("planter", "Semoirs"),
+    ("semoir", "Semoirs"),
+    ("drill", "Semoirs"),
+    ("sprayer", "Pulvérisateurs"),
+    ("pulverisateur", "Pulvérisateurs"),
+    ("pulvérisateur", "Pulvérisateurs"),
+    ("spreader", "Épandeurs"),
+    ("fertiliser", "Épandeurs"),
+    ("fertilizer", "Épandeurs"),
+    ("epandeur", "Épandeurs"),
+    ("épandeur", "Épandeurs"),
+    ("manure", "Épandeurs"),
+    ("baler", "Presses"),
+    ("presse", "Presses"),
+    ("wrapper", "Presses"),
+    ("enrubanneuse", "Presses"),
+    ("mower", "Fenaison"),
+    ("faucheuse", "Fenaison"),
+    ("tedder", "Fenaison"),
+    ("faneuse", "Fenaison"),
+    ("rake", "Fenaison"),
+    ("andaineur", "Fenaison"),
+    ("merger", "Fenaison"),
+    ("hoe", "Bineuses"),
+    ("bineuse", "Bineuses"),
+    ("weeder", "Bineuses"),
+    ("chopper", "Broyeurs"),
+    ("shredder", "Broyeurs"),
+    ("mulcher", "Broyeurs"),
+    ("broyeur", "Broyeurs"),
+    ("flail", "Broyeurs"),
+    ("front loader", "Chargeurs"),
+    ("chargeur frontal", "Chargeurs"),
+    ("loader", "Chargeurs"),
+    ("telehandler", "Télescopiques"),
+    ("telescopique", "Télescopiques"),
+    ("télescopique", "Télescopiques"),
+    ("trailer", "Remorques agricoles"),
+    ("remorque", "Remorques agricoles"),
+    ("wagon", "Remorques agricoles"),
+    ("mixer feeder", "Élevage & stabulation"),
+    ("desileuse", "Élevage & stabulation"),
+    ("désileuse", "Élevage & stabulation"),
+    ("melangeuse", "Élevage & stabulation"),
+    ("mélangeuse", "Élevage & stabulation"),
+    ("livestock", "Élevage & stabulation"),
+    ("milking", "Élevage & stabulation"),
+    ("vineyard", "Vendange"),
+    ("vigne", "Vendange"),
+    ("viticole", "Vendange"),
+    ("potato", "Cultures spécialisées"),
+    ("pomme de terre", "Cultures spécialisées"),
+    ("planteuse", "Cultures spécialisées"),
+    ("silo", "Stockage & séchage"),
+    ("grain dryer", "Stockage & séchage"),
+    ("sechoir", "Stockage & séchage"),
+    ("séchoir", "Stockage & séchage"),
+    ("irrigation", "Matériel d'irrigation"),
+    ("snow", "Déneigement"),
+    ("neige", "Déneigement"),
+]
+
+
+def normaliser_categorie(*textes: str) -> str:
+    """Normalise vers une catégorie officielle AgriScan par mot-clé.
+
+    Accepte plusieurs textes bruts (slug de catégorie, sous-catégorie, nom du
+    modèle...) et cherche le premier mot-clé qui matche dans l'ensemble.
+    Retourne "Autre" si rien ne correspond, plutôt que de laisser passer une
+    catégorie brute non maîtrisée (slug anglais, etc.) dans le catalogue.
+    """
+    # Les slugs d'URL utilisent des tirets ("disc-harrows") : on les
+    # normalise en espaces pour que les mots-clés à plusieurs mots matchent.
+    combined = " ".join(t or "" for t in textes).lower().replace("-", " ")
+    for mot_cle, categorie in CATEGORIE_MOTS_CLES:
+        if mot_cle in combined:
+            return categorie
+    return "Autre"
 
 
 def _badge(annee: str) -> str:
@@ -380,10 +502,10 @@ def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
         m = Machine()
         m.brand = "Kverneland"
         m.name = specs.pop("Model", "") or _clean_kverneland_title(page.title())
-        m.category = _humanize_slug(category_slug)
+        m.category = normaliser_categorie(category_slug, subcategory_slug, m.name)
         m.subcategory = _humanize_slug(subcategory_slug)
         m.sourceUrl = url
-        m.specs = json.dumps(specs, ensure_ascii=False)
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
 
         if not m.name or len(m.name) < 2:
             continue
