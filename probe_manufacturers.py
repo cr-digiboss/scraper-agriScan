@@ -1,8 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Explore la structure des sites constructeurs du lot 1 (Amazone, Case IH,
-Fendt, John Deere, Kuhn, Massey Ferguson) pour préparer de futurs scrapers.
-Ne touche pas à la base de données.
+Lot 3 : explore la structure des sites constructeurs (Landini, Same,
+McCormick, Kubota, Maschio Gaspardo, Bednar) pour préparer de futurs
+scrapers. Ne touche pas à la base de données.
 """
 
 import logging
@@ -13,12 +13,12 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 SITES = {
-    "Amazone": "https://amazone.net/fr",
-    "Case IH": "https://www.caseih.com/fr-be/belux",
-    "Fendt": "https://www.fendt.com/fr/",
-    "John Deere": "https://www.deere.be/fr/",
-    "Kuhn": "https://www.kuhn.com/fr",
-    "Massey Ferguson": "https://www.masseyferguson.com/fr_fr.html",
+    "Landini": "https://www.landini.it/fr-fr/",
+    "Same": "https://www.same-tractors.com/fr-fr/",
+    "McCormick": "https://mccormick.it/fr/",
+    "Kubota": "https://www.kubota-eu.com/fr/",
+    "Maschio Gaspardo": "https://www.maschionet.com/fr/",
+    "Bednar": "https://www.bednar.com/fr",
 }
 
 
