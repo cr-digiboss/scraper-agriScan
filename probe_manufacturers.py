@@ -75,7 +75,7 @@ def probe_product(name: str, url: str, page):
 def probe_site(name: str, url: str, page):
     log.info(f"\n{'=' * 80}\n{name} — {url}\n{'=' * 80}")
     try:
-        resp = page.goto(url, timeout=30000, wait_until="load")
+        resp = page.goto(url, timeout=15000, wait_until="domcontentloaded")
         log.info(f"HTTP status: {resp.status if resp else 'N/A'}")
         page.wait_for_timeout(5000)
         log.info(f"Titre : {page.title()}")
