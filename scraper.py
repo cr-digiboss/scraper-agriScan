@@ -21,6 +21,7 @@ from playwright.sync_api import sync_playwright, Page
 from bs4 import BeautifulSoup
 
 import db
+import qdrant_sync
 
 load_dotenv()
 
@@ -1229,6 +1230,19 @@ def _upsert(machines: list[Machine]) -> tuple[int, int]:
         conn.close()
 
 
+def _upsert_and_index(machines: list[Machine]) -> tuple[int, int, int, int]:
+    """Enregistre les machines dans Neon puis les indexe dans Qdrant pour
+    que l'assistant IA (AgriBot) reste à jour. L'indexation Qdrant ne
+    bloque jamais le scraping : ses erreurs sont seulement journalisées."""
+    neon_ok, neon_err = _upsert(machines)
+    try:
+        qdrant_ok, qdrant_err = qdrant_sync.index_machines(machines)
+    except Exception as e:
+        log.warning(f"  Qdrant : échec indexation ({len(machines)} machines) : {e}")
+        qdrant_ok, qdrant_err = 0, len(machines)
+    return neon_ok, neon_err, qdrant_ok, qdrant_err
+
+
 def run() -> int:
     conn = db.get_connection()
     existing_keys = db.get_existing_keys(conn)
@@ -1236,6 +1250,7 @@ def run() -> int:
     log.info(f"Neon : {len(existing_keys)} machines déjà en base")
 
     total_ok, total_err = 0, 0
+    total_qdrant_ok, total_qdrant_err = 0, 0
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -1268,10 +1283,12 @@ def run() -> int:
                 log.error(f"  ❌ Échec {nom_source} : {e}")
                 continue
             if machines:
-                ok, err = _upsert(machines)
+                ok, err, q_ok, q_err = _upsert_and_index(machines)
                 total_ok += ok
                 total_err += err
-                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
+                total_qdrant_ok += q_ok
+                total_qdrant_err += q_err
+                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs), {q_ok} indexées dans Qdrant ({q_err} erreurs)")
             else:
                 log.info("  → aucune nouvelle machine")
 
@@ -1279,16 +1296,21 @@ def run() -> int:
             log.info(f"Marque : {marque}")
             machines = scrape_marque(page, marque, liste_url, existing_keys)
             if machines:
-                ok, err = _upsert(machines)
+                ok, err, q_ok, q_err = _upsert_and_index(machines)
                 total_ok += ok
                 total_err += err
-                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs)")
+                total_qdrant_ok += q_ok
+                total_qdrant_err += q_err
+                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs), {q_ok} indexées dans Qdrant ({q_err} erreurs)")
             else:
                 log.info("  → aucune nouvelle machine")
 
         browser.close()
 
-    log.info(f"Terminé : {total_ok} machines enregistrées au total, {total_err} erreurs")
+    log.info(
+        f"Terminé : {total_ok} machines enregistrées au total ({total_err} erreurs Neon), "
+        f"{total_qdrant_ok} indexées dans Qdrant ({total_qdrant_err} erreurs)"
+    )
     return total_ok
 
 

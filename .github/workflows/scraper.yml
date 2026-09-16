@@ -22,3 +22,7 @@ jobs:
       - run: python scraper.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
