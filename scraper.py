@@ -1124,6 +1124,96 @@ def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Kemper — kemper-stadtlohn.de (becs de récolte maïs)
+# Structure : pas de <table>, mais un bloc "Données techniques" où chaque
+# attribut est suivi de sa valeur sur la ligne suivante (valeur = nombre +
+# unité, ex. "LONGUEUR" puis "1.60M").
+# ─────────────────────────────────────────────────────────────────────────────
+
+KEMPER_HOME = "https://www.kemper-stadtlohn.de/fr"
+
+
+def _kemper_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "kemper-stadtlohn.de" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) >= 3 and segments[0] == "fr" and segments[1] == "produkte" and "uebersicht" not in segments[-1]:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_label_next_line_spec_block(text: str) -> dict:
+    """Un bloc specs Kemper alterne label et valeur sur des lignes
+    successives ; seule une ligne "nombre + unité" confirme une vraie
+    paire (ex. "LONGUEUR" suivi de "1.60M")."""
+    lines = [l.strip() for l in text.split("\n")]
+    specs = {}
+    for i in range(len(lines) - 1):
+        label, valeur = lines[i], lines[i + 1]
+        if not label or not valeur:
+            continue
+        if re.match(r"^[\d.,]+\s*(m|cm|mm|kg|t|l)$", valeur, re.I):
+            specs[label.lower().capitalize()] = valeur
+    return specs
+
+
+def scrape_kemper(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Kemper non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(KEMPER_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Kemper inaccessible : {e}")
+        return machines
+
+    product_links = _kemper_product_links(page)
+    log.info(f"  Kemper → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        spec_blocks = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='daten' i]")
+        specs = {}
+        for block in spec_blocks:
+            specs.update(_parse_label_next_line_spec_block(block.inner_text()))
+
+        if not specs:
+            continue
+
+        m = Machine()
+        m.brand = "Kemper"
+        m.name = clean(page.title()).split("|")[0].strip()
+        m.category = normaliser_categorie(url)
+        m.sourceUrl = url
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1169,6 +1259,7 @@ def run() -> int:
             ("New Holland (newholland.com)", scrape_new_holland),
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
+            ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
         ]:
             log.info(f"Source : {nom_source}")
             try:
