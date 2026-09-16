@@ -1,9 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 2, round 2 : vérifie les specs sur 3 fiches modèles déjà identifiées
-(New Holland, Pöttinger, Monosem) ET cherche des fiches modèles plus
-profondes pour Valtra, Deutz-Fahr, Joskin. Ne touche pas à la base de
-données.
+Lot 2, round 3 : dump complet du tableau Pöttinger Aerosem M (lignes 3-14
+non vues au round 2) et crawl d'un niveau supplémentaire sur les
+sous-gammes Deutz-Fahr trouvées (Série 6.4, Série 6C). Ne touche pas à la
+base de données.
 """
 
 import logging
@@ -13,70 +13,47 @@ from playwright.sync_api import sync_playwright
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-PRODUCT_PAGES = {
-    "New Holland (Roll-Belt Plus)": "https://agriculture.newholland.com/fr-be/europe/produits/presses/roll-belt-plus",
-    "Pöttinger (Aerosem M)": "https://www.poettinger.at/fr_be/produkte/detail/asemm/aerosem-m-semoirs-pneumatiques-portes",
-    "Monosem (MS)": "https://www.monosem.fr/semoirs-de-precision/semoir-monograine/semoir-maraicher/ms/",
-}
+POETTINGER_URL = "https://www.poettinger.at/fr_be/produkte/detail/asemm/aerosem-m-semoirs-pneumatiques-portes"
 
-CATEGORY_PAGES = {
-    "Valtra (Série T)": "https://www.valtra.fr/produits/seriet.html",
-    "Deutz-Fahr (Série 6)": "https://www.deutz-fahr.com/fr-bx/tracteurs/serie-6",
-    "Joskin (Épandeurs de lisier)": "https://www.joskin.com/fr/%C3%A9pandeurs-de-lisier",
+DEUTZ_SUBRANGES = {
+    "Deutz-Fahr (Série 6.4)": "https://www.deutz-fahr.com/fr-bx/tracteurs/serie-6-4",
+    "Deutz-Fahr (Série 6C)": "https://www.deutz-fahr.com/fr-bx/tracteurs/serie-6c",
 }
 
 
-def probe_product(name: str, url: str, page):
+def probe_poettinger_full_table(page):
+    log.info(f"\n{'=' * 80}\nPöttinger (Aerosem M) — dump complet — {POETTINGER_URL}\n{'=' * 80}")
+    try:
+        page.goto(POETTINGER_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        for _ in range(5):
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(600)
+
+        tables = page.query_selector_all("table")
+        log.info(f"Nombre de <table> : {len(tables)}")
+        for i, t in enumerate(tables):
+            rows = t.query_selector_all("tr")
+            log.info(f"  Table {i}: {len(rows)} lignes — dump complet :")
+            for j, r in enumerate(rows):
+                log.info(f"    ligne {j} : {r.inner_text().replace(chr(10), ' | ')[:300]}")
+
+    except Exception as e:
+        log.error(f"Erreur Pöttinger : {e}")
+
+
+def probe_deutz_subrange(name: str, url: str, page):
     log.info(f"\n{'=' * 80}\n{name} — {url}\n{'=' * 80}")
     try:
         resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
         log.info(f"HTTP status: {resp.status if resp else 'N/A'}")
         page.wait_for_timeout(5000)
-        for _ in range(5):
-            page.mouse.wheel(0, 2500)
-            page.wait_for_timeout(600)
-        log.info(f"Titre : {page.title()}")
-
-        tables = page.query_selector_all("table")
-        log.info(f"Nombre de <table> : {len(tables)}")
-        for i, t in enumerate(tables[:4]):
-            rows = t.query_selector_all("tr")
-            log.info(f"  Table {i}: {len(rows)} lignes")
-            for r in rows[:2]:
-                log.info(f"    ligne : {r.inner_text().replace(chr(10), ' | ')[:180]}")
-
-        dls = page.query_selector_all("dl")
-        log.info(f"Nombre de <dl> : {len(dls)}")
-        if dls:
-            log.info(f"    échantillon : {dls[0].inner_text()[:250].replace(chr(10), ' | ')}")
-
-        spec_divs = page.query_selector_all(
-            "[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], "
-            "[class*='fiche-technique' i], [class*='donnees-techniques' i]"
-        )
-        log.info(f"Éléments classe spec/technical : {len(spec_divs)}")
-        for d in spec_divs[:3]:
-            txt = d.inner_text().strip().replace("\n", " | ")
-            if txt:
-                log.info(f"    échantillon : {txt[:250]}")
-
-        pdf_links = page.eval_on_selector_all("a[href*='.pdf' i]", "els => els.map(e => e.href)")
-        log.info(f"PDF trouvés : {len(pdf_links)}")
-        for p in pdf_links[:3]:
-            log.info(f"    {p}")
-
-    except Exception as e:
-        log.error(f"Erreur sur {name} : {e}")
-
-
-def probe_category(name: str, url: str, page):
-    log.info(f"\n{'=' * 80}\n{name} — {url}\n{'=' * 80}")
-    try:
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
         for _ in range(4):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(500)
+
+        tables = page.query_selector_all("table")
+        log.info(f"Nombre de <table> sur cette page : {len(tables)}")
 
         links = page.eval_on_selector_all(
             "a[href]", "els => els.map(e => ({href: e.href, text: e.textContent.trim()}))"
@@ -120,10 +97,9 @@ def main():
             viewport={"width": 1280, "height": 1600},
         )
         page = context.new_page()
-        for name, url in PRODUCT_PAGES.items():
-            probe_product(name, url, page)
-        for name, url in CATEGORY_PAGES.items():
-            probe_category(name, url, page)
+        probe_poettinger_full_table(page)
+        for name, url in DEUTZ_SUBRANGES.items():
+            probe_deutz_subrange(name, url, page)
         browser.close()
 
 
