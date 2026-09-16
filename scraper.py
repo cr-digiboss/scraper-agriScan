@@ -681,6 +681,449 @@ def scrape_claas(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Tableaux "larges" — Fendt, Massey Ferguson, New Holland
+# Structure : chaque COLONNE du tableau est un modèle/finition, chaque LIGNE
+# (après la 1ère) est un attribut technique avec une valeur par colonne.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_wide_models_table(table) -> dict:
+    """Table où chaque colonne est un modèle et chaque ligne un attribut."""
+    rows = table.query_selector_all("tr")
+    if not rows:
+        return {}
+    header_cells = rows[0].query_selector_all("td, th")
+    # La colonne 0 est toujours le nom de l'attribut (ligne), jamais un modèle.
+    models = [(i, clean(c.inner_text())) for i, c in enumerate(header_cells) if i > 0 and clean(c.inner_text())]
+    result = {name: {} for _, name in models}
+    for row in rows[1:]:
+        cells = row.query_selector_all("td, th")
+        if len(cells) < 2:
+            continue
+        attr_name = clean(cells[0].inner_text())
+        if not attr_name:
+            continue
+        for idx, name in models:
+            if idx < len(cells):
+                val = clean(cells[idx].inner_text())
+                if val:
+                    result[name][attr_name] = val
+    return result
+
+
+def _machines_from_wide_table(table, brand: str, category: str, range_name: str, source_url: str) -> list[Machine]:
+    models = _parse_wide_models_table(table)
+    machines = []
+    for name, specs in models.items():
+        if not specs or len(name) < 2:
+            continue
+        m = Machine()
+        m.brand = brand
+        m.range = range_name
+        m.name = name
+        m.category = category
+        m.sourceUrl = source_url
+        # Catalogue constructeur actuel : tout ce qu'on y trouve est en vente aujourd'hui
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        machines.append(m)
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fendt — fendt.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+FENDT_HOME = "https://www.fendt.com/fr/"
+
+# Sections du site qui ne sont pas des fiches produits
+FENDT_EXCLUSIONS = [
+    "smart-farming",
+    "accessoires-originaux-technologie",
+    "domaines-dapplication",
+]
+
+
+def _fendt_product_links(page: Page) -> set:
+    """Une fiche produit Fendt a une URL à 4 segments :
+    /fr/machines-agricoles/<categorie>/<modele>."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "fendt.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 4 and segments[0] == "fr" and segments[1] == "machines-agricoles":
+            if any(x in segments[2] for x in FENDT_EXCLUSIONS):
+                continue
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_fendt(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Fendt non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(FENDT_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Fendt inaccessible : {e}")
+        return machines
+
+    product_links = _fendt_product_links(page)
+    log.info(f"  Fendt → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug = segments[2]
+        range_name = clean(page.title()).split("|")[0].strip()
+        category = normaliser_categorie(category_slug, range_name)
+
+        for candidats in _machines_from_wide_table(tables[0], "Fendt", category, range_name, url):
+            key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+            if key in existing_keys:
+                continue
+            machines.append(candidats)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Massey Ferguson — masseyferguson.com
+# ─────────────────────────────────────────────────────────────────────────────
+
+MF_HOME = "https://www.masseyferguson.com/fr_fr.html"
+
+
+def _mf_product_links(page: Page) -> set:
+    """Une fiche produit Massey Ferguson est sous /product/<categorie>/<modele>.html."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "masseyferguson.com" not in u.netloc:
+            continue
+        if "/product/" in u.path and u.path.endswith(".html"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_massey_ferguson(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Massey Ferguson non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(MF_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Massey Ferguson inaccessible : {e}")
+        return machines
+
+    product_links = _mf_product_links(page)
+    log.info(f"  Massey Ferguson → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug = segments[-2] if len(segments) >= 2 else ""
+        range_name = clean(page.title()).split("|")[0].strip()
+        category = normaliser_categorie(category_slug, range_name)
+
+        for candidats in _machines_from_wide_table(tables[0], "Massey Ferguson", category, range_name, url):
+            key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+            if key in existing_keys:
+                continue
+            machines.append(candidats)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# New Holland — agriculture.newholland.com
+# La page d'accueil mélange des liens agricoles et BTP (construction) : on
+# part directement des 4 catégories agricoles connues plutôt que d'un crawl
+# générique, pour éviter de remonter du matériel de chantier.
+# ─────────────────────────────────────────────────────────────────────────────
+
+NEW_HOLLAND_CATEGORIES = [
+    "https://agriculture.newholland.com/fr-be/europe/produits/tracteurs",
+    "https://agriculture.newholland.com/fr-be/europe/produits/presses",
+    "https://agriculture.newholland.com/fr-be/europe/produits/moissonneuses-batteuses",
+    "https://agriculture.newholland.com/fr-be/europe/produits/ensileuses",
+]
+
+
+def _new_holland_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "newholland.com" not in u.netloc:
+            continue
+        if u.path.startswith(base_path) and u.path != base_path and u.path.rstrip("/") != base_path.rstrip("/"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles New Holland (tracteurs, presses, moissonneuses,
+    ensileuses) non encore présentes dans Neon."""
+    machines = []
+
+    for category_url in NEW_HOLLAND_CATEGORIES:
+        base_path = urlparse(category_url).path
+        category_slug = base_path.rstrip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+        except Exception as e:
+            log.warning(f"  New Holland ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _new_holland_product_links(page, base_path)
+        log.info(f"  New Holland ({category_slug}) → {len(product_links)} fiches modèles trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            range_name = clean(page.title()).split("|")[0].strip()
+
+            for candidats in _machines_from_wide_table(tables[0], "New Holland", category, range_name, url):
+                key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(candidats)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AVR — avrmachinery.com (matériel pomme de terre)
+# Structure : chaque fiche produit a un petit tableau clé/valeur (la première
+# ligne affiche juste le nom du modèle, sans clé).
+# ─────────────────────────────────────────────────────────────────────────────
+
+AVR_CATEGORIES = [
+    "https://www.avrmachinery.com/en/products/harvesters",
+    "https://www.avrmachinery.com/en/products/soil-cultivators",
+    "https://www.avrmachinery.com/en/products/potato-planters",
+    "https://www.avrmachinery.com/en/products/haulm-toppers",
+    "https://www.avrmachinery.com/en/products/crop-handling",
+]
+
+
+def _avr_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "avrmachinery.com" not in u.netloc:
+            continue
+        if "/en/product/" in u.path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_avr(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles AVR non encore présentes dans Neon."""
+    machines = []
+
+    for category_url in AVR_CATEGORIES:
+        category_slug = category_url.rstrip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+        except Exception as e:
+            log.warning(f"  AVR ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _avr_product_links(page)
+        log.info(f"  AVR ({category_slug}) → {len(product_links)} fiches modèles trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            rows = tables[0].query_selector_all("tr")
+            specs = {}
+            for row in rows[1:]:
+                cells = row.query_selector_all("td, th")
+                if len(cells) < 2:
+                    continue
+                k = clean(cells[0].inner_text())
+                v = clean(cells[1].inner_text())
+                if k and v:
+                    specs[k] = v
+
+            if not specs:
+                continue
+
+            m = Machine()
+            m.brand = "AVR"
+            m.name = clean(page.title()).replace("AVR", "").strip()
+            m.category = category
+            m.sourceUrl = url
+            m.statut = "active"
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+            if not m.name or len(m.name) < 2:
+                continue
+
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
+
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# McHale — mchale.net (presses, enrubanneuses, faneuses)
+# Structure : pas de <table> pour les specs, mais un bloc "Technical
+# Specification" dont le texte affiche chaque paire clé/valeur séparée par
+# une tabulation (les en-têtes de catégorie n'ont pas de tabulation).
+# ─────────────────────────────────────────────────────────────────────────────
+
+MCHALE_HOME = "https://www.mchale.net/"
+
+
+def _mchale_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "mchale.net" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 2 and segments[0] == "products":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_tab_spec_block(text: str) -> dict:
+    """Un bloc specs McHale mélange en-têtes de catégorie (pas de tabulation)
+    et paires clé/valeur (séparées par une tabulation) sur des lignes
+    distinctes."""
+    specs = {}
+    for line in text.split("\n"):
+        parts = line.split("\t")
+        if len(parts) == 2:
+            k, v = clean(parts[0]), clean(parts[1])
+            if k and v:
+                specs[k] = v
+    return specs
+
+
+def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles McHale non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  McHale inaccessible : {e}")
+        return machines
+
+    product_links = _mchale_product_links(page)
+    log.info(f"  McHale → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        spec_blocks = page.query_selector_all("[class*='spec' i], [class*='technical' i]")
+        specs = {}
+        for block in spec_blocks:
+            specs.update(_parse_tab_spec_block(block.inner_text()))
+
+        if not specs:
+            continue
+
+        m = Machine()
+        m.brand = "McHale"
+        m.name = clean(page.title()).split("–")[0].strip()
+        m.category = normaliser_categorie(url)
+        m.sourceUrl = url
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -721,6 +1164,11 @@ def run() -> int:
         for nom_source, scraper_fn in [
             ("Kverneland", scrape_kverneland),
             ("Claas (claas.com)", scrape_claas),
+            ("Fendt (fendt.com)", scrape_fendt),
+            ("Massey Ferguson (masseyferguson.com)", scrape_massey_ferguson),
+            ("New Holland (newholland.com)", scrape_new_holland),
+            ("AVR (avrmachinery.com)", scrape_avr),
+            ("McHale (mchale.net)", scrape_mchale),
         ]:
             log.info(f"Source : {nom_source}")
             try:
