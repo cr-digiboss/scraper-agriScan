@@ -1,8 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Explore la structure des sites constructeurs du lot 1 (Amazone, Case IH,
-Fendt, John Deere, Kuhn, Massey Ferguson) pour préparer de futurs scrapers.
-Ne touche pas à la base de données.
+Lot 4 : explore la structure des sites constructeurs restants (McHale,
+Bogballe, Einböck, Geringhoff, Kemper, Capello, Agrisem, Jeulin, Güttler,
+Actisol, Niubo, Naïo Technologies, AVR, Warzée) pour préparer de futurs
+scrapers. Ne touche pas à la base de données.
 """
 
 import logging
@@ -13,12 +14,20 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 SITES = {
-    "Amazone": "https://amazone.net/fr",
-    "Case IH": "https://www.caseih.com/fr-be/belux",
-    "Fendt": "https://www.fendt.com/fr/",
-    "John Deere": "https://www.deere.be/fr/",
-    "Kuhn": "https://www.kuhn.com/fr",
-    "Massey Ferguson": "https://www.masseyferguson.com/fr_fr.html",
+    "McHale": "https://www.mchale.net/",
+    "Bogballe": "https://www.bogballe.com/",
+    "Einböck": "https://www.einboeck.at/",
+    "Geringhoff": "https://www.geringhoff.de/",
+    "Kemper": "https://www.kemper-agriculture.com/",
+    "Capello": "https://www.capelloind.com/",
+    "Agrisem": "https://www.agrisem.com/",
+    "Jeulin": "https://www.jeulin.fr/",
+    "Güttler": "https://www.guettler.de/",
+    "Actisol": "https://www.actisol.fr/",
+    "Niubo": "https://www.niubo.com/",
+    "Naïo Technologies": "https://www.naio-technologies.com/",
+    "AVR": "https://www.avr.be/",
+    "Warzée": "https://www.warzee.be/",
 }
 
 
