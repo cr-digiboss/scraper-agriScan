@@ -1,61 +1,62 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Dump des liens de 3 pages catégorie (Amazone, John Deere, Kuhn) pour
-trouver une vraie fiche modèle à sonder ensuite. Ne touche pas à la
-base de données.
+Vérifie les tableaux de specs sur une vraie fiche modèle pour Amazone,
+John Deere et Kuhn. Ne touche pas à la base de données.
 """
 
 import logging
-from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 PAGES = {
-    "Amazone (charrues)": "https://amazone.net/fr/produits-et-solutions-digitales/machines-agricoles/travail-du-sol/charrues",
-    "John Deere (Série 6M)": "https://www.deere.be/fr/tracteurs/moyenne/s%C3%A9rie-6m/",
-    "Kuhn (mélangeuses 3 vis)": "https://www.kuhn.com/fr/elevage/melangeuses-trainees/melangeuses-3-vis-verticales",
+    "Amazone (charrue Teres 300)": "https://amazone.net/fr/produits-et-solutions-digitales/machines-agricoles/travail-du-sol/charrues/charrue-port%C3%A9e-teres-300-1084002",
+    "John Deere (6M 230)": "https://www.deere.be/fr/tracteurs/moyenne/s%C3%A9rie-6m/6m230/",
+    "Kuhn (Euromix 3 DL)": "https://www.kuhn.com/fr/elevage/melangeuses-trainees/melangeuses-3-vis-verticales/euromix-3-dl",
 }
 
 
 def probe(name: str, url: str, page):
     log.info(f"\n{'=' * 80}\n{name} — {url}\n{'=' * 80}")
     try:
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        log.info(f"HTTP status: {resp.status if resp else 'N/A'}")
         page.wait_for_timeout(5000)
-        for _ in range(4):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(500)
+        for _ in range(6):
+            page.mouse.wheel(0, 2500)
+            page.wait_for_timeout(600)
+        log.info(f"Titre : {page.title()}")
+        log.info(f"URL finale : {page.url}")
 
-        links = page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => ({href: e.href, text: e.textContent.trim()}))"
+        tables = page.query_selector_all("table")
+        log.info(f"Nombre de <table> sur la page : {len(tables)}")
+        for i, t in enumerate(tables[:5]):
+            rows = t.query_selector_all("tr")
+            log.info(f"  Table {i}: {len(rows)} lignes")
+            for r in rows[:2]:
+                txt = r.inner_text().replace("\n", " | ")
+                log.info(f"    ligne : {txt[:180]}")
+
+        dls = page.query_selector_all("dl")
+        log.info(f"Nombre de <dl> sur la page : {len(dls)}")
+        if dls:
+            log.info(f"    échantillon dl[0] : {dls[0].inner_text()[:250].replace(chr(10), ' | ')}")
+
+        spec_divs = page.query_selector_all(
+            "[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], "
+            "[class*='fiche-technique' i], [class*='donnees-techniques' i]"
         )
-        final_domain = urlparse(page.url).netloc
-        root_domain = ".".join(final_domain.split(".")[-2:])
-        base_path = urlparse(page.url).path.rstrip("/")
+        log.info(f"Éléments avec classe spec/technical/caractéristique : {len(spec_divs)}")
+        for d in spec_divs[:3]:
+            txt = d.inner_text().strip().replace("\n", " | ")
+            if txt:
+                log.info(f"    échantillon : {txt[:250]}")
 
-        # On cherche les liens qui vont PLUS PROFOND que la page actuelle
-        # (candidats pour être des fiches modèles individuelles)
-        deeper = []
-        for l in links:
-            u = urlparse(l["href"])
-            if root_domain not in l["href"] or not l["text"]:
-                continue
-            if u.path.rstrip("/").startswith(base_path) and u.path.rstrip("/") != base_path:
-                deeper.append(l)
-
-        seen = set()
-        uniq = []
-        for l in deeper:
-            if l["href"] not in seen:
-                seen.add(l["href"])
-                uniq.append(l)
-
-        log.info(f"Liens plus profonds que la page actuelle : {len(uniq)}")
-        for l in uniq[:40]:
-            log.info(f"  [{l['text'][:55]:55}] {l['href']}")
+        pdf_links = page.eval_on_selector_all("a[href*='.pdf' i]", "els => els.map(e => e.href)")
+        log.info(f"Liens PDF trouvés : {len(pdf_links)}")
+        for p in pdf_links[:5]:
+            log.info(f"    {p}")
 
     except Exception as e:
         log.error(f"Erreur sur {name} : {e}")
