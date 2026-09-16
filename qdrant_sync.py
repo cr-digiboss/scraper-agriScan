@@ -20,12 +20,14 @@ import logging
 
 import requests
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 log = logging.getLogger("agriscan")
 
 MISTRAL_EMBED_URL = "https://api.mistral.ai/v1/embeddings"
 EMBED_MODEL = "mistral-embed"
+# Dimension des vecteurs produits par mistral-embed.
+EMBED_DIM = 1024
 BATCH_SIZE = 32
 
 # Namespace fixe pour dériver un id Qdrant stable à partir de la clé
@@ -84,6 +86,18 @@ def _configured() -> bool:
     )
 
 
+def _ensure_collection(client: QdrantClient, collection: str) -> None:
+    """Crée la collection si elle n'existe pas encore (même chatbot que le
+    chat AgriBot y cherche : sans collection, tout upsert échoue en 404)."""
+    if client.collection_exists(collection):
+        return
+    log.info(f"  Qdrant : collection « {collection} » absente, création...")
+    client.create_collection(
+        collection_name=collection,
+        vectors_config=VectorParams(size=EMBED_DIM, distance=Distance.COSINE),
+    )
+
+
 def index_machines(machines: list) -> tuple[int, int]:
     """Indexe une liste de Machine dans Qdrant. Retourne (réussies, erreurs)."""
     if not machines or not _configured():
@@ -91,6 +105,12 @@ def index_machines(machines: list) -> tuple[int, int]:
 
     client = QdrantClient(url=os.environ["QDRANT_URL"], api_key=os.environ["QDRANT_API_KEY"])
     collection = os.environ["QDRANT_COLLECTION"]
+
+    try:
+        _ensure_collection(client, collection)
+    except Exception as e:
+        log.warning(f"  Qdrant : échec création/vérification de la collection : {e}")
+        return 0, len(machines)
 
     ok, errors = 0, 0
     for i in range(0, len(machines), BATCH_SIZE):
