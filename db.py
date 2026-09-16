@@ -6,6 +6,7 @@ La connexion utilise uniquement la variable d'environnement DATABASE_URL
 """
 
 import os
+import json
 import logging
 
 import psycopg2
@@ -29,6 +30,40 @@ def get_existing_keys(conn) -> set:
     with conn.cursor() as cur:
         cur.execute('SELECT brand, name, variant FROM "Machine"')
         return {f"{brand}|{name}|{variant}" for brand, name, variant in cur.fetchall()}
+
+
+MACHINE_COLUMNS = [
+    "brand", "range", "name", "variant", "category", "subcategory",
+    "description", "specs", "sourceUrl",
+]
+
+_SELECT_MACHINES_SQL = (
+    'SELECT brand, range, name, variant, category, subcategory, '
+    'description, specs, "sourceUrl" FROM "Machine" ORDER BY "createdAt"'
+)
+
+
+def iter_all_machines(conn, batch_size: int = 200):
+    """Parcourt toutes les machines de Neon par lots (pour le backfill Qdrant).
+
+    Utilise un curseur nommé pour éviter de charger tout le catalogue en
+    mémoire d'un coup. Retourne des dicts avec les mêmes noms de champs
+    que le dataclass Machine (brand, range, name, ...) pour être réutilisés
+    directement par qdrant_sync.
+    """
+    with conn.cursor(name="agriscan_backfill") as cur:
+        cur.itersize = batch_size
+        cur.execute(_SELECT_MACHINES_SQL)
+        while True:
+            rows = cur.fetchmany(batch_size)
+            if not rows:
+                break
+            batch = []
+            for row in rows:
+                data = dict(zip(MACHINE_COLUMNS, row))
+                data["specs"] = json.dumps(data["specs"]) if isinstance(data["specs"], dict) else (data["specs"] or "{}")
+                batch.append(data)
+            yield batch
 
 
 UPSERT_SQL = """
