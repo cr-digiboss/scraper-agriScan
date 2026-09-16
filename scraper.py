@@ -941,6 +941,189 @@ def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AVR — avrmachinery.com (matériel pomme de terre)
+# Structure : chaque fiche produit a un petit tableau clé/valeur (la première
+# ligne affiche juste le nom du modèle, sans clé).
+# ─────────────────────────────────────────────────────────────────────────────
+
+AVR_CATEGORIES = [
+    "https://www.avrmachinery.com/en/products/harvesters",
+    "https://www.avrmachinery.com/en/products/soil-cultivators",
+    "https://www.avrmachinery.com/en/products/potato-planters",
+    "https://www.avrmachinery.com/en/products/haulm-toppers",
+    "https://www.avrmachinery.com/en/products/crop-handling",
+]
+
+
+def _avr_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "avrmachinery.com" not in u.netloc:
+            continue
+        if "/en/product/" in u.path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_avr(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles AVR non encore présentes dans Neon."""
+    machines = []
+
+    for category_url in AVR_CATEGORIES:
+        category_slug = category_url.rstrip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+        except Exception as e:
+            log.warning(f"  AVR ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _avr_product_links(page)
+        log.info(f"  AVR ({category_slug}) → {len(product_links)} fiches modèles trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            rows = tables[0].query_selector_all("tr")
+            specs = {}
+            for row in rows[1:]:
+                cells = row.query_selector_all("td, th")
+                if len(cells) < 2:
+                    continue
+                k = clean(cells[0].inner_text())
+                v = clean(cells[1].inner_text())
+                if k and v:
+                    specs[k] = v
+
+            if not specs:
+                continue
+
+            m = Machine()
+            m.brand = "AVR"
+            m.name = clean(page.title()).replace("AVR", "").strip()
+            m.category = category
+            m.sourceUrl = url
+            m.statut = "active"
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+            if not m.name or len(m.name) < 2:
+                continue
+
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
+
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# McHale — mchale.net (presses, enrubanneuses, faneuses)
+# Structure : pas de <table> pour les specs, mais un bloc "Technical
+# Specification" dont le texte affiche chaque paire clé/valeur séparée par
+# une tabulation (les en-têtes de catégorie n'ont pas de tabulation).
+# ─────────────────────────────────────────────────────────────────────────────
+
+MCHALE_HOME = "https://www.mchale.net/"
+
+
+def _mchale_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "mchale.net" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 2 and segments[0] == "products":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_tab_spec_block(text: str) -> dict:
+    """Un bloc specs McHale mélange en-têtes de catégorie (pas de tabulation)
+    et paires clé/valeur (séparées par une tabulation) sur des lignes
+    distinctes."""
+    specs = {}
+    for line in text.split("\n"):
+        parts = line.split("\t")
+        if len(parts) == 2:
+            k, v = clean(parts[0]), clean(parts[1])
+            if k and v:
+                specs[k] = v
+    return specs
+
+
+def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles McHale non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  McHale inaccessible : {e}")
+        return machines
+
+    product_links = _mchale_product_links(page)
+    log.info(f"  McHale → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        spec_blocks = page.query_selector_all("[class*='spec' i], [class*='technical' i]")
+        specs = {}
+        for block in spec_blocks:
+            specs.update(_parse_tab_spec_block(block.inner_text()))
+
+        if not specs:
+            continue
+
+        m = Machine()
+        m.brand = "McHale"
+        m.name = clean(page.title()).split("–")[0].strip()
+        m.category = normaliser_categorie(url)
+        m.sourceUrl = url
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -984,6 +1167,8 @@ def run() -> int:
             ("Fendt (fendt.com)", scrape_fendt),
             ("Massey Ferguson (masseyferguson.com)", scrape_massey_ferguson),
             ("New Holland (newholland.com)", scrape_new_holland),
+            ("AVR (avrmachinery.com)", scrape_avr),
+            ("McHale (mchale.net)", scrape_mchale),
         ]:
             log.info(f"Source : {nom_source}")
             try:
