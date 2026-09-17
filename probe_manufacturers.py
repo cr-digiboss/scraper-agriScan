@@ -1,79 +1,19 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Diagnostique pourquoi scrape_mchale trouve 40 fiches produit mais en
-extrait 0 machine : dump la structure réelle d'une fiche produit McHale
-(tables, classes contenant "spec"/"technical", texte brut) pour voir
-pourquoi le sélecteur actuel ([class*='spec' i], [class*='technical' i])
-ne matche rien. Ne touche pas à la base de données.
+Round 2 : la fiche produit McHale n'a AUCUNE table, AUCUN élément
+[class*=spec/technical], AUCUN titre avec mot-clé specs, AUCUN PDF.
+Dump exhaustif : toutes les classes uniques présentes sur la page,
+tous les boutons/onglets cliquables, et un extrait du texte brut complet
+de la page pour localiser où sont réellement les caractéristiques.
 """
 
 import logging
-from urllib.parse import urlparse
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-MCHALE_HOME = "https://www.mchale.net/"
-
-
-def find_product_links(page) -> list:
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = set()
-    for href in hrefs:
-        u = urlparse(href)
-        if "mchale.net" not in u.netloc:
-            continue
-        segments = [s for s in u.path.split("/") if s]
-        if len(segments) == 2 and segments[0] == "products":
-            links.add(href.split("?")[0].split("#")[0])
-    return sorted(links)
-
-
-def probe_product(page, url):
-    log.info(f"\n{'=' * 80}\n{url}\n{'=' * 80}")
-    try:
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        for _ in range(6):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(400)
-
-        tables = page.query_selector_all("table")
-        log.info(f"Nombre de <table> : {len(tables)}")
-
-        spec_els = page.query_selector_all("[class*='spec' i], [class*='technical' i]")
-        log.info(f"Éléments [class*=spec/technical] : {len(spec_els)}")
-
-        # Cherche tout élément dont le texte contient un mot-clé de section specs
-        all_els = page.query_selector_all("h1, h2, h3, h4, div, section")
-        keyword_hits = []
-        for el in all_els[:400]:
-            try:
-                txt = el.inner_text().strip()
-            except Exception:
-                continue
-            if txt and len(txt) < 60 and any(
-                kw in txt.lower() for kw in ["technical", "specification", "spec", "dimensions", "données"]
-            ):
-                cls = el.get_attribute("class") or ""
-                tag = el.evaluate("e => e.tagName")
-                keyword_hits.append((tag, cls[:80], txt[:60]))
-
-        log.info(f"Titres/blocs contenant un mot-clé specs : {len(keyword_hits)}")
-        for tag, cls, txt in keyword_hits[:15]:
-            log.info(f"  <{tag} class=\"{cls}\"> {txt}")
-
-        # Cherche des liens PDF (fiche technique en téléchargement)
-        pdf_links = page.eval_on_selector_all(
-            "a[href$='.pdf']", "els => els.map(e => e.href)"
-        )
-        log.info(f"Liens PDF : {len(pdf_links)}")
-        for l in pdf_links[:5]:
-            log.info(f"  {l}")
-
-    except Exception as e:
-        log.error(f"Erreur sur {url} : {e}")
+URL = "https://www.mchale.net/products/691-round-bale-handler/"
 
 
 def main():
@@ -88,16 +28,50 @@ def main():
             viewport={"width": 1280, "height": 1600},
         )
         page = context.new_page()
+        page.goto(URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        for _ in range(10):
+            page.mouse.wheel(0, 2000)
+            page.wait_for_timeout(500)
 
-        page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        links = find_product_links(page)
-        log.info(f"Liens produit trouvés : {len(links)}")
+        # Toutes les classes uniques présentes sur la page
+        classes = page.eval_on_selector_all(
+            "*[class]",
+            "els => [...new Set(els.flatMap(e => [...e.classList]))]",
+        )
+        log.info(f"Nombre de classes CSS uniques : {len(classes)}")
+        keyword_classes = [c for c in classes if any(
+            k in c.lower() for k in ["spec", "tech", "detail", "feature", "data", "tab", "accordion"]
+        )]
+        log.info(f"Classes contenant un mot-clé pertinent : {keyword_classes}")
 
-        # Un produit qui marchait déjà (baler) + deux qui ne marchaient pas
-        # a priori (autres catégories), pour comparer.
-        for url in links[:4]:
-            probe_product(page, url)
+        # Boutons / onglets cliquables
+        buttons = page.eval_on_selector_all(
+            "button, [role=tab], [role=button], a.tab, .tab, .accordion-title, .accordion-header",
+            "els => els.map(e => e.textContent.trim()).filter(t => t)",
+        )
+        log.info(f"Boutons/onglets trouvés ({len(buttons)}) : {buttons[:30]}")
+
+        # Structure des sections principales (id + classe des <section>/<div> de premier niveau sous main/body)
+        sections = page.eval_on_selector_all(
+            "main *, body > div *",
+            "els => els.slice(0, 0)",
+        )
+
+        # Texte brut complet (tronqué) pour repérer visuellement où sont les caractéristiques
+        body_text = page.inner_text("body")
+        log.info(f"Longueur texte body : {len(body_text)} caractères")
+        log.info("--- Texte body (2000 premiers caractères) ---")
+        log.info(body_text[:2000])
+        log.info("--- Texte body (2000 derniers caractères) ---")
+        log.info(body_text[-2000:])
+
+        # Cherche le mot "kg", "mm", "cm" dans le texte pour localiser une zone de chiffres/unités
+        import re
+        matches = list(re.finditer(r".{40}(kg|mm|cm|litre|litres|tonnes?).{20}", body_text, re.I))
+        log.info(f"Occurrences proches d'unités (kg/mm/cm/litre/tonne) : {len(matches)}")
+        for m in matches[:15]:
+            log.info(f"  ...{m.group(0)}...")
 
         browser.close()
 
