@@ -1,9 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Cherche comment découvrir les fiches produit Pöttinger (pattern
-/produkte/detail/<slug>/<nom>) depuis une page catégorie, pour valider
-la stratégie de crawl avant d'écrire le scraper définitif. Ne touche pas
-à la base de données.
+Vérifie qu'une page catégorie Pöttinger liste bien des liens
+/produkte/detail/ directement (crawl à 2 niveaux : catégorie -> fiche
+produit), avant d'écrire le scraper définitif.
 """
 
 import logging
@@ -13,13 +12,13 @@ from playwright.sync_api import sync_playwright
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-POETTINGER_URLS = [
-    "https://www.poettinger.at/fr_be/produkte",
-    "https://www.poettinger.at/fr_be/",
+CATEGORY_URLS = [
+    "https://www.poettinger.at/fr_be/produkte/kategorie/sm/semoirs",
+    "https://www.poettinger.at/fr_be/produkte/kategorie/pf/charrues",
 ]
 
 
-def probe_links(page, url):
+def probe_category(page, url):
     log.info(f"\n{'=' * 80}\n{url}\n{'=' * 80}")
     try:
         resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
@@ -33,37 +32,23 @@ def probe_links(page, url):
             "a[href]", "els => els.map(e => ({href: e.href, text: e.textContent.trim()}))"
         )
         product_links = []
-        category_links = []
         for h in hrefs:
             u = urlparse(h["href"])
             if "poettinger.at" not in u.netloc:
                 continue
             if "/produkte/detail/" in u.path:
                 product_links.append(h)
-            elif "/produkte/" in u.path and u.path.rstrip("/") != "/fr_be/produkte":
-                category_links.append(h)
 
         seen = set()
-        uniq_products = []
+        uniq = []
         for l in product_links:
             if l["href"] not in seen:
                 seen.add(l["href"])
-                uniq_products.append(l)
+                uniq.append(l)
 
-        seen2 = set()
-        uniq_categories = []
-        for l in category_links:
-            if l["href"] not in seen2:
-                seen2.add(l["href"])
-                uniq_categories.append(l)
-
-        log.info(f"Liens fiches produit (/produkte/detail/) : {len(uniq_products)}")
-        for l in uniq_products[:20]:
-            log.info(f"  [{l['text'][:50]:50}] {l['href']}")
-
-        log.info(f"Liens catégorie (/produkte/...) : {len(uniq_categories)}")
-        for l in uniq_categories[:20]:
-            log.info(f"  [{l['text'][:50]:50}] {l['href']}")
+        log.info(f"Liens fiches produit (/produkte/detail/) : {len(uniq)}")
+        for l in uniq[:20]:
+            log.info(f"  [{l['text'][:60]:60}] {l['href']}")
 
     except Exception as e:
         log.error(f"Erreur sur {url} : {e}")
@@ -81,8 +66,8 @@ def main():
             viewport={"width": 1280, "height": 1600},
         )
         page = context.new_page()
-        for url in POETTINGER_URLS:
-            probe_links(page, url)
+        for url in CATEGORY_URLS:
+            probe_category(page, url)
         browser.close()
 
 
