@@ -1215,6 +1215,87 @@ def scrape_kemper(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pöttinger — poettinger.at
+# La page catégorie (/produkte/kategorie/<code>/<slug>) liste directement les
+# fiches produit (/produkte/detail/<slug>/<nom>) : pas de crawl à 3 niveaux.
+# Une fiche produit a un <table> unique, une colonne par modèle de la gamme,
+# compatible avec le parser générique _machines_from_wide_table.
+# ─────────────────────────────────────────────────────────────────────────────
+
+POTTINGER_CATEGORIES = {
+    "Faucheuses": "https://www.poettinger.at/fr_be/produkte/kategorie/mw/faucheuses",
+    "Faneuses": "https://www.poettinger.at/fr_be/produkte/kategorie/zk/faneuses",
+    "Technique d'andainage": "https://www.poettinger.at/fr_be/produkte/kategorie/sk/technique-dandainage",
+    "Remorques autochargeuses": "https://www.poettinger.at/fr_be/produkte/kategorie/lw/remorques-autochargeuses",
+    "Presse à balles rondes": "https://www.poettinger.at/fr_be/produkte/kategorie/rp/presse-a-balles-rondes",
+    "Autres produits fenaison": "https://www.poettinger.at/fr_be/produkte/kategorie/gs/autres-produits-fenaison",
+    "Charrues": "https://www.poettinger.at/fr_be/produkte/kategorie/pf/charrues",
+    "Déchaumeurs à dents": "https://www.poettinger.at/fr_be/produkte/kategorie/gr/dechaumeurs-a-dents",
+    "Déchaumeurs à disques": "https://www.poettinger.at/fr_be/produkte/kategorie/se/dechaumeurs-a-disques",
+    "Herses rotatives": "https://www.poettinger.at/fr_be/produkte/kategorie/ke/herses-rotatives",
+    "Combinés compacts": "https://www.poettinger.at/fr_be/produkte/kategorie/kk/combines-compacts",
+    "Semoirs": "https://www.poettinger.at/fr_be/produkte/kategorie/sm/semoirs",
+    "Outils d'entretien des cultures": "https://www.poettinger.at/fr_be/produkte/kategorie/kp/outils-dentretien-des-cultures",
+    "Autres produits culture": "https://www.poettinger.at/fr_be/produkte/kategorie/bs/autres-produits-culture_",
+}
+
+
+def _pottinger_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "poettinger.at" not in u.netloc:
+            continue
+        if "/produkte/detail/" in u.path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_pottinger(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Pöttinger non encore présentes dans Neon."""
+    machines = []
+
+    for category_name, category_url in POTTINGER_CATEGORIES.items():
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+        except Exception as e:
+            log.warning(f"  Pöttinger ({category_name}) inaccessible : {e}")
+            continue
+
+        product_links = _pottinger_product_links(page)
+        log.info(f"  Pöttinger ({category_name}) → {len(product_links)} fiches modèles trouvées")
+        category = normaliser_categorie(category_url, category_name)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            range_name = clean(page.title()).split("|")[0].strip()
+
+            for candidats in _machines_from_wide_table(tables[0], "Pöttinger", category, range_name, url):
+                key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(candidats)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1275,6 +1356,7 @@ def run() -> int:
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
             ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
+            ("Pöttinger (poettinger.at)", scrape_pottinger),
         ]:
             log.info(f"Source : {nom_source}")
             try:
