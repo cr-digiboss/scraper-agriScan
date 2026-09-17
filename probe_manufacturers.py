@@ -25,7 +25,7 @@ def main():
                 "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
             locale="fr-FR",
-            viewport={"width": 1280, "height": 1600},
+            viewport={"width": 1280, "height": 800},
         )
         page = context.new_page()
 

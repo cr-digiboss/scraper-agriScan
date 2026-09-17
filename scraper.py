@@ -1089,14 +1089,15 @@ def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
     for i, url in enumerate(sorted(product_links), 1):
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000)
             # La section "Technical Specification" (classe techspec) est montée
             # en lazy-load au scroll : sans ça, elle n'existe pas encore dans
-            # le DOM et le sélecteur ci-dessous ne trouve jamais rien. On scrolle
-            # jusqu'au bas réel de la page (pas une distance fixe qui peut être
-            # insuffisante selon la longueur de la fiche).
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            page.wait_for_timeout(2000)
+            # le DOM et le sélecteur ci-dessous ne trouve jamais rien. Un scroll
+            # programmatique (window.scrollTo) ne suffit pas : il faut de vrais
+            # événements wheel, seul mécanisme confirmé déclencher le montage.
+            for _ in range(10):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(500)
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
