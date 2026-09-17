@@ -20,7 +20,7 @@ import logging
 
 import requests
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, VectorParams
 
 log = logging.getLogger("agriscan")
 
@@ -98,6 +98,18 @@ def _ensure_collection(client: QdrantClient, collection: str) -> None:
     )
 
 
+def _ensure_indexes(client: QdrantClient, collection: str) -> None:
+    """Crée les index de payload nécessaires aux filtres marque/typeMachine
+    du chat AgriBot (Qdrant refuse de filtrer sur un champ non indexé).
+    Idempotent : recréer un index existant avec le même schéma est un no-op."""
+    for field in ("marque", "typeMachine"):
+        client.create_payload_index(
+            collection_name=collection,
+            field_name=field,
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+
+
 def index_machines(machines: list) -> tuple[int, int]:
     """Indexe une liste de Machine dans Qdrant. Retourne (réussies, erreurs)."""
     if not machines or not _configured():
@@ -108,6 +120,7 @@ def index_machines(machines: list) -> tuple[int, int]:
 
     try:
         _ensure_collection(client, collection)
+        _ensure_indexes(client, collection)
     except Exception as e:
         log.warning(f"  Qdrant : échec création/vérification de la collection : {e}")
         return 0, len(machines)
