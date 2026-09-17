@@ -1090,6 +1090,12 @@ def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
+            # La section "Technical Specification" (classe techspec) est montée
+            # en lazy-load au scroll : sans ça, elle n'existe pas encore dans
+            # le DOM et le sélecteur ci-dessous ne trouve jamais rien.
+            for _ in range(6):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(400)
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
