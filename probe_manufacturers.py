@@ -1,7 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Confirme que la fix consiste à utiliser une NOUVELLE page (pas celle qui
-vient de charger la home) pour visiter chaque fiche produit.
+Dernier test : un délai de 20s entre la visite home et la fiche produit
+suffit-il, si c'est bien une détection anti-bot basée sur la fréquence
+des requêtes (pas le fait même d'une deuxième requête) ?
 """
 
 import logging
@@ -34,19 +35,16 @@ def main():
             locale="fr-FR",
             viewport={"width": 1280, "height": 800},
         )
+        page = context.new_page()
+        page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
 
-        # Page 1 : sert uniquement à charger la home et lister les liens.
-        home_page = context.new_page()
-        home_page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
-        home_page.wait_for_timeout(4000)
-        home_page.close()
+        log.info("Attente de 20s avant la deuxième requête...")
+        page.wait_for_timeout(20000)
 
-        # Page 2 : nouvelle page dédiée, dont c'est la SEULE navigation.
-        product_page = context.new_page()
-        product_page.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        product_page.wait_for_timeout(5000)
-        scroll_and_check(product_page, "D nouvelle page dédiée par fiche produit")
-        product_page.close()
+        page.goto(URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        scroll_and_check(page, "E délai 20s entre home et produit")
 
         browser.close()
 
