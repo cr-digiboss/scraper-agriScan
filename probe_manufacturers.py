@@ -1,11 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-scrape_mchale échoue toujours (0 specs) même avec la recette exacte
-(vrais wheel events, 10x2000px/500ms, 5s d'attente) qui avait marché en
-sondage isolé. Seule différence restante : scrape_mchale navigue vers
-la page d'accueil McHale AVANT la fiche produit (pour lister les liens),
-alors que le sondage réussi allait directement sur l'URL produit.
-Compare les deux scénarios sur la même URL, dans le même run.
+Confirme que la fix consiste à utiliser une NOUVELLE page (pas celle qui
+vient de charger la home) pour visiter chaque fiche produit.
 """
 
 import logging
@@ -39,38 +35,18 @@ def main():
             viewport={"width": 1280, "height": 800},
         )
 
-        # Scénario A : navigation directe (comme le sondage qui avait marché)
-        page_a = context.new_page()
-        page_a.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        page_a.wait_for_timeout(5000)
-        scroll_and_check(page_a, "A directe")
-        page_a.close()
+        # Page 1 : sert uniquement à charger la home et lister les liens.
+        home_page = context.new_page()
+        home_page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
+        home_page.wait_for_timeout(4000)
+        home_page.close()
 
-        # Scénario B : home d'abord, puis la fiche produit (comme scrape_mchale)
-        page_b = context.new_page()
-        page_b.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
-        page_b.wait_for_timeout(4000)
-        page_b.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        page_b.wait_for_timeout(5000)
-        scroll_and_check(page_b, "B home-puis-produit")
-        page_b.close()
-
-        # Scénario C : comme B mais sur un NOUVEAU contexte (cookies/session isolés)
-        context2 = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            locale="fr-FR",
-            viewport={"width": 1280, "height": 800},
-        )
-        page_c = context2.new_page()
-        page_c.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
-        page_c.wait_for_timeout(4000)
-        page_c.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        page_c.wait_for_timeout(5000)
-        scroll_and_check(page_c, "C nouveau contexte, home-puis-produit")
-        page_c.close()
+        # Page 2 : nouvelle page dédiée, dont c'est la SEULE navigation.
+        product_page = context.new_page()
+        product_page.goto(URL, timeout=30000, wait_until="domcontentloaded")
+        product_page.wait_for_timeout(5000)
+        scroll_and_check(product_page, "D nouvelle page dédiée par fiche produit")
+        product_page.close()
 
         browser.close()
 
