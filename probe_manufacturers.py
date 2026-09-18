@@ -1,14 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Le blocage Playwright ressemble à une détection anti-bot basée sur les
-requêtes successives (scroll, viewport, délai : rien n'a marché). Teste
-si une simple requête HTTP (requests + BeautifulSoup, sans navigateur)
-suffit à récupérer le bloc "Technical Specification" — plausible si le
-contenu est en fait rendu côté serveur et non injecté par JS après coup.
+Confirme que la découverte des liens produit McHale fonctionne aussi
+en HTTP simple (sans navigateur), avant de réécrire scrape_mchale.
 """
 
 import logging
-import re
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,7 +13,7 @@ from bs4 import BeautifulSoup
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-URL = "https://www.mchale.net/products/691-round-bale-handler/"
+MCHALE_HOME = "https://www.mchale.net/"
 
 
 def main():
@@ -27,31 +24,39 @@ def main():
         ),
         "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
     }
-    resp = requests.get(URL, headers=headers, timeout=30)
-    log.info(f"HTTP status : {resp.status_code}")
-    log.info(f"Longueur réponse : {len(resp.text)} caractères")
+    resp = requests.get(MCHALE_HOME, headers=headers, timeout=30)
+    log.info(f"HTTP status home : {resp.status_code}")
 
     soup = BeautifulSoup(resp.text, "html.parser")
+    links = set()
+    for a in soup.find_all("a", href=True):
+        href = urljoin(MCHALE_HOME, a["href"])
+        u = urlparse(href)
+        if "mchale.net" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 2 and segments[0] == "products":
+            links.add(href.split("?")[0].split("#")[0])
 
-    tables = soup.find_all("table")
-    log.info(f"Nombre de <table> : {len(tables)}")
+    log.info(f"Liens produit trouvés : {len(links)}")
+    for l in sorted(links)[:10]:
+        log.info(f"  {l}")
 
-    spec_els = soup.select("[class*='spec' i], [class*='technical' i]")
-    log.info(f"Éléments [class*=spec/technical] : {len(spec_els)}")
-    for el in spec_els[:5]:
-        log.info(f"  <{el.name} class=\"{el.get('class')}\"> {el.get_text()[:200]!r}")
-
-    has_techspec_text = "Technical Specification" in resp.text
-    log.info(f"Texte 'Technical Specification' présent dans le HTML brut : {has_techspec_text}")
-
-    has_weight_row = bool(re.search(r"Weight\s*.{0,50}kg", resp.text))
-    log.info(f"Motif 'Weight ... kg' présent : {has_weight_row}")
-
-    # Dump d'un extrait autour de "Technical" si trouvé, pour voir le format brut
-    idx = resp.text.find("Technical Specification")
-    if idx != -1:
-        log.info("--- Extrait HTML brut autour de 'Technical Specification' ---")
-        log.info(resp.text[idx:idx + 1500])
+    # Vérifie une deuxième fiche produit au hasard pour confirmer que ce
+    # n'est pas spécifique à la page 691 déjà testée.
+    if len(links) >= 2:
+        second_url = sorted(links)[5] if len(links) > 5 else sorted(links)[1]
+        resp2 = requests.get(second_url, headers=headers, timeout=30)
+        soup2 = BeautifulSoup(resp2.text, "html.parser")
+        tables2 = soup2.find_all("table")
+        log.info(f"Deuxième fiche testée : {second_url}")
+        log.info(f"  HTTP status : {resp2.status_code}, tables trouvées : {len(tables2)}")
+        if tables2:
+            rows = tables2[0].find_all("tr")
+            log.info(f"  Lignes dans la première table : {len(rows)}")
+            for r in rows[:5]:
+                cells = r.find_all("td")
+                log.info(f"    {[c.get_text(strip=True) for c in cells]}")
 
 
 if __name__ == "__main__":
