@@ -1521,6 +1521,146 @@ def scrape_lemken(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Kuhn — kuhn.fr
+# Crawl par catégories (grande culture, fourrages, élevage, paysage).
+# Format de tableau particulier : chaque section de specs est scindée en
+# deux <table> consécutives (une colonne de libellés, avec une 1ère ligne
+# vide en coin, + une table de données dont la 1ère ligne porte les noms
+# de modèles) — répété section par section sur la même fiche, contrairement
+# au tableau large classique à une seule table.
+# ─────────────────────────────────────────────────────────────────────────────
+
+KUHN_CATEGORIES = {
+    "Travail du sol": "https://www.kuhn.fr/grande-culture/materiels-de-travail-du-sol",
+    "Semis": "https://www.kuhn.fr/grande-culture/semoirs",
+    "Fertilisation": "https://www.kuhn.fr/grande-culture/distributeurs-dengrais",
+    "Pulvérisation": "https://www.kuhn.fr/grande-culture/pulverisateurs",
+    "Désherbage mécanique": "https://www.kuhn.fr/grande-culture/desherbage-mecanique",
+    "Broyage grande culture": "https://www.kuhn.fr/grande-culture/broyeurs",
+    "Fauche": "https://www.kuhn.fr/herbe-fourrages/faucheuses",
+    "Fenaison": "https://www.kuhn.fr/herbe-fourrages/faneurs",
+    "Andainage": "https://www.kuhn.fr/herbe-fourrages/andaineurs",
+    "Pressage": "https://www.kuhn.fr/herbe-fourrages/presses",
+    "Enrubannage": "https://www.kuhn.fr/herbe-fourrages/enrubanneuses",
+    "Broyage polyvalent": "https://www.kuhn.fr/herbe-fourrages/broyeurs-polyvalents",
+    "Désilage-distribution": "https://www.kuhn.fr/elevage/desileuses-distributrices",
+    "Paillage": "https://www.kuhn.fr/elevage/pailleuses-et-pailleuses-distributrices",
+    "Désilage-paillage": "https://www.kuhn.fr/elevage/desileuses-pailleuses",
+    "Mélange traîné": "https://www.kuhn.fr/elevage/melangeuses-trainees",
+    "Mélange automoteur": "https://www.kuhn.fr/elevage/melangeuses-automotrices",
+    "Mélange stationnaire": "https://www.kuhn.fr/elevage/melangeuses-stationnaires",
+    "Entretien du paysage": "https://www.kuhn.fr/paysage-voirie/materiels-dentretien-du-paysage",
+    "Broyage paysage": "https://www.kuhn.fr/paysage-voirie/broyeurs",
+}
+
+
+def _kuhn_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "kuhn.fr" not in u.netloc:
+            continue
+        if u.path.rstrip("/").startswith(base_path) and u.path.rstrip("/") != base_path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_kuhn_spec_tables(tables) -> dict:
+    """Les specs Kuhn sont scindées en paires de tables consécutives : une
+    table à 1 colonne (libellés, 1ère ligne vide en coin) et une table de
+    données (1ère ligne = noms de modèles, lignes suivantes = valeurs
+    alignées sur les libellés de la table jumelle)."""
+    result: dict = {}
+    model_names: list = []
+    for i in range(0, len(tables) - 1, 2):
+        label_rows = tables[i].query_selector_all("tr")
+        data_rows = tables[i + 1].query_selector_all("tr")
+        if not data_rows:
+            continue
+        header_cells = data_rows[0].query_selector_all("td, th")
+        header = [clean(c.inner_text()) for c in header_cells]
+        if not any(header):
+            continue
+        if not model_names:
+            model_names = header
+            for name in model_names:
+                if name:
+                    result.setdefault(name, {})
+        for row_idx in range(1, min(len(label_rows), len(data_rows))):
+            label_cells = label_rows[row_idx].query_selector_all("td, th")
+            label = clean(label_cells[0].inner_text()) if label_cells else ""
+            if not label:
+                continue
+            value_cells = data_rows[row_idx].query_selector_all("td, th")
+            for col_idx, name in enumerate(model_names):
+                if not name or col_idx >= len(value_cells):
+                    continue
+                val = clean(value_cells[col_idx].inner_text())
+                if val:
+                    result[name][label] = val
+    return result
+
+
+def scrape_kuhn(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Kuhn non encore présentes dans Neon."""
+    machines = []
+
+    for category_name, category_url in KUHN_CATEGORIES.items():
+        base_path = urlparse(category_url).path
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Kuhn ({category_name}) inaccessible : {e}")
+            continue
+
+        product_links = _kuhn_product_links(page, base_path)
+        log.info(f"  Kuhn ({category_name}) → {len(product_links)} fiches trouvées")
+        category = normaliser_categorie(category_url, category_name)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+                for _ in range(6):
+                    page.mouse.wheel(0, 1500)
+                    page.wait_for_timeout(250)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if len(tables) < 2:
+                continue
+
+            range_name = clean(page.title()).split("|")[0].strip()
+            models = _parse_kuhn_spec_tables(tables)
+
+            for name, specs in models.items():
+                if not specs or len(name) < 2:
+                    continue
+                key = f"Kuhn|{name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Kuhn"
+                m.range = range_name
+                m.name = name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1585,6 +1725,7 @@ def run() -> int:
             ("Grimme (grimme.com)", scrape_grimme),
             ("Väderstad (vaderstad.com)", scrape_vaderstad),
             ("Lemken (lemken.com)", scrape_lemken),
+            ("Kuhn (kuhn.fr)", scrape_kuhn),
         ]:
             log.info(f"Source : {nom_source}")
             try:
