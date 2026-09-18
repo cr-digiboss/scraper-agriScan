@@ -1312,6 +1312,215 @@ def scrape_pottinger(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Grimme — grimme.com (arracheuses/tamiseuses pommes de terre)
+# Fiches produit sur le sous-domaine products.grimme.com, tableau large
+# classique (une colonne par modèle), compatible avec le parser générique.
+# ─────────────────────────────────────────────────────────────────────────────
+
+GRIMME_HOME = "https://www.grimme.com/fr/"
+
+
+def _grimme_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "grimme.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 3 and segments[1] == "p":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_grimme(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Grimme non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(GRIMME_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Grimme inaccessible : {e}")
+        return machines
+
+    product_links = _grimme_product_links(page)
+    log.info(f"  Grimme → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        category = normaliser_categorie(url, clean(page.title()))
+        range_name = clean(page.title()).split("|")[0].strip()
+
+        for candidats in _machines_from_wide_table(tables[0], "Grimme", category, range_name, url):
+            key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+            if key in existing_keys:
+                continue
+            machines.append(candidats)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Väderstad — vaderstad.com (travail du sol, semoirs)
+# Fiches produit trouvées directement depuis la home (liens /fr/... à au
+# moins 3 segments). Le tableau specs a un format particulier : la ligne
+# d'en-tête ne porte que la largeur (ex. "400"), pas le nom complet du
+# modèle — il faut préfixer avec le nom de la gamme (ex. "Opus 400").
+# ─────────────────────────────────────────────────────────────────────────────
+
+VADERSTAD_HOME = "https://www.vaderstad.com/fr/"
+
+
+def _vaderstad_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "vaderstad.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) >= 3 and segments[0] == "fr":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_vaderstad(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Väderstad non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(VADERSTAD_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Väderstad inaccessible : {e}")
+        return machines
+
+    product_links = _vaderstad_product_links(page)
+    log.info(f"  Väderstad → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        range_name = clean(page.title()).split("|")[0].strip()
+        category = normaliser_categorie(url, range_name)
+        family = range_name.split(" - ")[0].strip() if range_name else ""
+
+        models = _parse_wide_models_table(tables[0])
+        for raw_name, specs in models.items():
+            if not specs or len(raw_name) < 1:
+                continue
+            m = Machine()
+            m.brand = "Väderstad"
+            m.range = range_name
+            m.name = f"{family} {raw_name}".strip() if family and family not in raw_name else raw_name
+            m.category = category
+            m.sourceUrl = url
+            m.statut = "active"
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lemken — lemken.com (travail du sol, semis)
+# Crawl à 2 niveaux : catégorie -> fiche produit. Tableau large classique.
+# ─────────────────────────────────────────────────────────────────────────────
+
+LEMKEN_CATEGORIES = {
+    "Travail du sol": "https://lemken.com/fr-fr/machines-agricoles/travail-du-sol",
+    "Semis": "https://lemken.com/fr-fr/machines-agricoles/semis",
+    "Protection des cultures": "https://lemken.com/fr-fr/machines-agricoles/protection-des-cultures",
+}
+
+
+def _lemken_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "lemken.com" not in u.netloc:
+            continue
+        if u.path.rstrip("/").startswith(base_path) and u.path.rstrip("/") != base_path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_lemken(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Lemken non encore présentes dans Neon."""
+    machines = []
+
+    for category_name, category_url in LEMKEN_CATEGORIES.items():
+        base_path = urlparse(category_url).path
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
+        except Exception as e:
+            log.warning(f"  Lemken ({category_name}) inaccessible : {e}")
+            continue
+
+        product_links = _lemken_product_links(page, base_path)
+        log.info(f"  Lemken ({category_name}) → {len(product_links)} fiches trouvées")
+        category = normaliser_categorie(category_url, category_name)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            range_name = clean(page.title()).split("|")[0].strip()
+
+            for candidats in _machines_from_wide_table(tables[0], "Lemken", category, range_name, url):
+                key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(candidats)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1373,6 +1582,9 @@ def run() -> int:
             ("McHale (mchale.net)", scrape_mchale),
             ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
             ("Pöttinger (poettinger.at)", scrape_pottinger),
+            ("Grimme (grimme.com)", scrape_grimme),
+            ("Väderstad (vaderstad.com)", scrape_vaderstad),
+            ("Lemken (lemken.com)", scrape_lemken),
         ]:
             log.info(f"Source : {nom_source}")
             try:
