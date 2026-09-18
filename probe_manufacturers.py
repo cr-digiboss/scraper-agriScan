@@ -1,65 +1,97 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 6, round 2 : depuis une page catégorie, trouver les liens produits,
-puis ouvrir une fiche produit et chercher un tableau de specs.
+Lot 6, round 3 :
+- Amazone : 0 table trouvée sur une fiche produit -> chercher où sont les specs
+  (onglets à cliquer, accordéons, sections par mot-clé).
+- Kuhn : round 2 a ouvert des pages de sous-catégorie, pas de vraies fiches
+  produit -> ouvrir une vraie fiche (master-103) et chercher les tables.
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-CATEGORY_URLS = {
-    "Amazone": "https://amazone.fr/fr-fr/produits-et-solutions-digitales/machines-agricoles/travail-du-sol/charrues",
-    "Kuhn": "https://www.kuhn.fr/grande-culture/materiels-de-travail-du-sol",
-}
+AMAZONE_URL = "https://amazone.fr/fr-fr/produits-et-solutions-digitales/machines-agricoles/travail-du-sol/charrues/charrue-cayros-portee-a-braquage-complet-298404"
+KUHN_URL = "https://www.kuhn.fr/grande-culture/materiels-de-travail-du-sol/charrues/charrues-portees-reversibles/master-103"
 
 
-def collect_links(page, netloc_hint):
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = []
-    seen = set()
-    for href in hrefs:
-        u = urlparse(href)
-        if netloc_hint not in u.netloc:
+def probe_amazone(page):
+    log.info(f"\n===== Amazone fiche : {AMAZONE_URL} =====")
+    page.goto(AMAZONE_URL, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(3000)
+    for _ in range(8):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(300)
+
+    # Chercher boutons / onglets contenant des mots-clés specs
+    candidats_boutons = page.query_selector_all(
+        "button, a, [role='tab'], [class*='tab' i], [class*='accordion' i]"
+    )
+    log.info(f"  Boutons/onglets candidats : {len(candidats_boutons)}")
+    mots = ["caractérist", "technique", "spec", "données", "detail"]
+    matches = []
+    for el in candidats_boutons:
+        try:
+            txt = (el.inner_text() or "").strip().lower()
+        except Exception:
             continue
-        clean = href.split("?")[0].split("#")[0]
-        if clean in seen or not clean:
-            continue
-        seen.add(clean)
-        links.append(clean)
-    return links
+        if txt and any(m in txt for m in mots):
+            matches.append(txt)
+    log.info(f"  Boutons/onglets matchant mots-clés : {matches[:20]}")
+
+    # Chercher dl/dt/dd
+    dls = page.query_selector_all("dl")
+    log.info(f"  <dl> trouvés : {len(dls)}")
+
+    # Chercher iframe
+    iframes = page.query_selector_all("iframe")
+    log.info(f"  <iframe> trouvés : {len(iframes)}")
+    for i, ifr in enumerate(iframes[:5]):
+        log.info(f"    iframe {i} src={ifr.get_attribute('src')}")
+
+    # Dump du texte brut de la page (les 3000 premiers car. après le titre)
+    body_text = page.inner_text("body")
+    log.info(f"  Longueur texte body : {len(body_text)}")
+    idx = body_text.lower().find("caractérist")
+    if idx == -1:
+        idx = body_text.lower().find("technique")
+    if idx != -1:
+        log.info("  Extrait autour du mot-clé trouvé :")
+        log.info("  " + body_text[max(0, idx - 100):idx + 900].replace("\n", " | "))
+    else:
+        log.info("  Aucun mot-clé 'caractérist'/'technique' trouvé dans le texte visible.")
 
 
-def inspect_product_page(page, url):
-    log.info(f"    -> ouverture fiche : {url}")
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-        for _ in range(6):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(300)
-        title = page.title()
-        tables = page.query_selector_all("table")
-        log.info(f"       Titre: {title}")
-        log.info(f"       Tables trouvées: {len(tables)}")
-        for i, t in enumerate(tables[:3]):
-            txt = t.inner_text()
-            log.info(f"       --- table {i} ({len(txt)} car.) ---")
-            log.info("       " + txt[:400].replace("\n", " | "))
-        if not tables:
-            specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
-            log.info(f"       Éléments spec-like (sans table): {len(specish)}")
-            for i, el in enumerate(specish[:3]):
-                cls = el.get_attribute("class") or ""
-                txt = el.inner_text()
-                log.info(f"       --- elt {i} class=\"{cls}\" ({len(txt)} car.) ---")
-                log.info("       " + txt[:400].replace("\n", " | "))
-    except Exception as e:
-        log.info(f"       ERREUR : {e!r}")
+def probe_kuhn(page):
+    log.info(f"\n===== Kuhn fiche : {KUHN_URL} =====")
+    page.goto(KUHN_URL, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(3000)
+    for _ in range(8):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(300)
+
+    title = page.title()
+    log.info(f"  Titre : {title}")
+    tables = page.query_selector_all("table")
+    log.info(f"  Tables trouvées : {len(tables)}")
+    for i, t in enumerate(tables[:3]):
+        txt = t.inner_text()
+        log.info(f"  --- table {i} ({len(txt)} car.) ---")
+        log.info("  " + txt[:500].replace("\n", " | "))
+
+    if not tables:
+        specish = page.query_selector_all(
+            "[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='fiche' i]"
+        )
+        log.info(f"  Éléments spec-like : {len(specish)}")
+        for i, el in enumerate(specish[:5]):
+            cls = el.get_attribute("class") or ""
+            txt = el.inner_text()
+            log.info(f"  --- elt {i} class=\"{cls}\" ({len(txt)} car.) ---")
+            log.info("  " + txt[:400].replace("\n", " | "))
 
 
 def main():
@@ -74,31 +106,19 @@ def main():
             viewport={"width": 1280, "height": 1600},
         )
 
-        for brand, url in CATEGORY_URLS.items():
-            log.info(f"\n===== {brand} catégorie : {url} =====")
-            page = context.new_page()
-            try:
-                page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                page.wait_for_timeout(3000)
-                for _ in range(6):
-                    page.mouse.wheel(0, 2000)
-                    page.wait_for_timeout(300)
-                netloc_hint = urlparse(url).netloc.replace("www.", "")
-                links = collect_links(page, netloc_hint)
-                log.info(f"  Liens internes uniques : {len(links)}")
-                base_path = urlparse(url).path
-                candidates = [l for l in links if urlparse(l).path != base_path and urlparse(l).path.startswith(base_path)]
-                log.info(f"  Candidats sous-chemin ({base_path}) : {len(candidates)}")
-                for c in candidates[:15]:
-                    log.info(f"    {c}")
-                if candidates:
-                    inspect_product_page(page, candidates[0])
-                    if len(candidates) > 1:
-                        inspect_product_page(page, candidates[1])
-            except Exception as e:
-                log.info(f"  ERREUR : {e!r}")
-            finally:
-                page.close()
+        page = context.new_page()
+        try:
+            probe_amazone(page)
+        except Exception as e:
+            log.info(f"  ERREUR Amazone : {e!r}")
+        page.close()
+
+        page = context.new_page()
+        try:
+            probe_kuhn(page)
+        except Exception as e:
+            log.info(f"  ERREUR Kuhn : {e!r}")
+        page.close()
 
         browser.close()
 
