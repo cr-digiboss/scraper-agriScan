@@ -14,8 +14,9 @@ import random
 import logging
 from dataclasses import dataclass
 from datetime import date
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
+import requests
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page
 from bs4 import BeautifulSoup
@@ -1038,18 +1039,32 @@ def scrape_avr(page: Page, existing_keys: set) -> list[Machine]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # McHale — mchale.net (presses, enrubanneuses, faneuses)
-# Structure : pas de <table> pour les specs, mais un bloc "Technical
-# Specification" dont le texte affiche chaque paire clé/valeur séparée par
-# une tabulation (les en-têtes de catégorie n'ont pas de tabulation).
+# La section "Technical Specification" (classe techspec) est en fait rendue
+# côté serveur, mais Chromium/Playwright ne la reçoit jamais : dès qu'un
+# deuxième chargement de page (home puis fiche produit) a lieu dans la même
+# session navigateur, le HTML renvoyé est tronqué avant cette section -
+# scroll, délai, page dédiée, rien n'y change (confirmé par sondage). Une
+# simple requête HTTP (requests + BeautifulSoup) reçoit le HTML complet,
+# où la section contient un <table> classique <td>label</td><td>valeur</td>.
 # ─────────────────────────────────────────────────────────────────────────────
 
 MCHALE_HOME = "https://www.mchale.net/"
+_MCHALE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+}
 
 
-def _mchale_product_links(page: Page) -> set:
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+def _mchale_product_links() -> set:
+    resp = requests.get(MCHALE_HOME, headers=_MCHALE_HEADERS, timeout=30)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
     links = set()
-    for href in hrefs:
+    for a in soup.find_all("a", href=True):
+        href = urljoin(MCHALE_HOME, a["href"])
         u = urlparse(href)
         if "mchale.net" not in u.netloc:
             continue
@@ -1059,15 +1074,21 @@ def _mchale_product_links(page: Page) -> set:
     return links
 
 
-def _parse_tab_spec_block(text: str) -> dict:
-    """Un bloc specs McHale mélange en-têtes de catégorie (pas de tabulation)
-    et paires clé/valeur (séparées par une tabulation) sur des lignes
-    distinctes."""
+def _parse_mchale_spec_table(soup: BeautifulSoup) -> dict:
+    """La section specs (classe contenant "spec"/"technical") contient un
+    <table> label/valeur classique ; les autres <table> de la page (listes
+    de points forts, etc.) n'en font pas partie et doivent être ignorées."""
+    container = soup.select_one("[class*='spec' i], [class*='technical' i]")
+    if not container:
+        return {}
+    table = container.find("table")
+    if not table:
+        return {}
     specs = {}
-    for line in text.split("\n"):
-        parts = line.split("\t")
-        if len(parts) == 2:
-            k, v = clean(parts[0]), clean(parts[1])
+    for row in table.find_all("tr"):
+        cells = row.find_all(["td", "th"])
+        if len(cells) == 2:
+            k, v = clean(cells[0].get_text()), clean(cells[1].get_text())
             if k and v:
                 specs[k] = v
     return specs
@@ -1077,40 +1098,29 @@ def scrape_mchale(page: Page, existing_keys: set) -> list[Machine]:
     """Scrape les fiches modèles McHale non encore présentes dans Neon."""
     machines = []
     try:
-        page.goto(MCHALE_HOME, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
+        product_links = _mchale_product_links()
     except Exception as e:
         log.warning(f"  McHale inaccessible : {e}")
         return machines
 
-    product_links = _mchale_product_links(page)
     log.info(f"  McHale → {len(product_links)} fiches modèles trouvées sur le site")
 
     for i, url in enumerate(sorted(product_links), 1):
         try:
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-            # La section "Technical Specification" (classe techspec) est montée
-            # en lazy-load au scroll : sans ça, elle n'existe pas encore dans
-            # le DOM et le sélecteur ci-dessous ne trouve jamais rien.
-            for _ in range(6):
-                page.mouse.wheel(0, 2000)
-                page.wait_for_timeout(400)
+            resp = requests.get(url, headers=_MCHALE_HEADERS, timeout=30)
+            resp.raise_for_status()
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
 
-        spec_blocks = page.query_selector_all("[class*='spec' i], [class*='technical' i]")
-        specs = {}
-        for block in spec_blocks:
-            specs.update(_parse_tab_spec_block(block.inner_text()))
-
+        soup = BeautifulSoup(resp.text, "html.parser")
+        specs = _parse_mchale_spec_table(soup)
         if not specs:
             continue
 
         m = Machine()
         m.brand = "McHale"
-        m.name = clean(page.title()).split("–")[0].strip()
+        m.name = clean(soup.title.get_text()).split("–")[0].strip() if soup.title else ""
         m.category = normaliser_categorie(url)
         m.sourceUrl = url
         m.statut = "active"
