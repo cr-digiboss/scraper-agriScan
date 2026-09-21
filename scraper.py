@@ -1779,19 +1779,31 @@ def _parse_valtra_series_table(table) -> dict:
 
     header_rows = []
     data_start = None
+    data_cell_count = None
     for idx, row in enumerate(rows):
         cells = row.query_selector_all("td, th")
         texts = [clean(c.inner_text()) for c in cells]
         first = texts[0] if texts else ""
         if first and _VALTRA_MODEL_RE.match(first):
             data_start = idx
+            data_cell_count = len(texts)
             break
         header_rows.append(texts)
 
-    if data_start is None or not header_rows:
+    if data_start is None or not header_rows or not data_cell_count:
         return {}
 
-    header = header_rows[-1]
+    # Certaines pages (ex. série F) ont un en-tête imbriqué sur plusieurs
+    # lignes fragmentées/quasi-vides (rowspan/colspan) qu'on ne peut pas
+    # reconstruire fiablement en lisant les <tr> un par un. On ne garde que
+    # les lignes d'en-tête dont le nombre de cellules correspond exactement
+    # aux lignes de données : mieux vaut ne rien extraire de ces pages que
+    # produire des specs mal alignées (ex. une puissance associée au mauvais
+    # libellé).
+    aligned_headers = [h for h in header_rows if len(h) == data_cell_count and any(h)]
+    if not aligned_headers:
+        return {}
+    header = aligned_headers[-1]
     seen: dict = {}
     labels = []
     for i, h in enumerate(header):
