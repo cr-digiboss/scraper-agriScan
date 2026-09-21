@@ -1661,6 +1661,210 @@ def scrape_kuhn(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# JCB — jcb.com
+# Crawl par catégories (construction + agricole). Tableau large classique
+# (colonne 0 = attribut, en-tête = codes modèles), compatible avec le
+# parser générique déjà utilisé pour Pöttinger/Lemken/Grimme.
+# ─────────────────────────────────────────────────────────────────────────────
+
+JCB_CATEGORIES = {
+    "Chargeurs compacts sur chenilles": "https://www.jcb.com/fr-FR/products/machines/chargeurs-compacts-sur-chenilles/",
+    "Chargeuses compactes sur pneus": "https://www.jcb.com/fr-FR/products/machines/skid-steer-loader/",
+    "Chargeuses-pelleteuses": "https://www.jcb.com/fr-FR/products/machines/chargeuses-pelleteuses/",
+    "Chargeuses sur pneumatiques": "https://www.jcb.com/fr-FR/products/machines/chargeuses-sur-pneumatiques/",
+    "Chariots élévateurs tout-terrain": "https://www.jcb.com/fr-FR/products/machines/rough-terrain-forklifts/",
+    "Télescopiques rotatifs": "https://www.jcb.com/fr-FR/products/machines/rotating-telehandlers/",
+    "Compacteurs monobille": "https://www.jcb.com/fr-FR/products/machines/single-drum-soil-compactors/",
+    "Dumpers de chantier": "https://www.jcb.com/fr-FR/products/machines/site-dumpers/",
+    "Bennes": "https://www.jcb.com/fr-FR/products/machines/dumpsters/",
+    "Groupes électrogènes": "https://www.jcb.com/fr-FR/products/machines/groupes-electrogenes/",
+    "Hydradig": "https://www.jcb.com/fr-FR/products/machines/hydradig/",
+    "Mini-pelles": "https://www.jcb.com/fr-FR/products/machines/mini-pelles/",
+    "Nacelles articulées": "https://www.jcb.com/fr-FR/products/machines/articulated-booms/",
+    "Nacelles ciseaux électriques": "https://www.jcb.com/fr-FR/products/machines/nacelles-ciseaux-electriques/",
+    "Pelles sur chenilles": "https://www.jcb.com/fr-FR/products/machines/pelles-sur-chenilles/",
+    "Pelles sur roues": "https://www.jcb.com/fr-FR/products/machines/wheeled-excavators/",
+    "Pothole Pro": "https://www.jcb.com/fr-FR/products/machines/pothole-pro/",
+    "Rouleaux vibrants tandem": "https://www.jcb.com/fr-FR/products/machines/vibratory-tandem-rollers/",
+    "Télescopiques": "https://www.jcb.com/fr-FR/products/machines/telescopic/",
+    "Télescopiques articulés": "https://www.jcb.com/fr-FR/products/machines/telescopic-articules/",
+    "Chariots élévateurs industriels": "https://www.jcb.com/fr-FR/products/machines/industrial-forklifts/",
+    "Tracteurs": "https://www.jcb.com/fr-FR/products/machines/tracteurs/",
+}
+
+
+def _jcb_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "jcb.com" not in u.netloc:
+            continue
+        if u.path.rstrip("/").startswith(base_path.rstrip("/")) and u.path.rstrip("/") != base_path.rstrip("/"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_jcb(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles JCB non encore présentes dans Neon."""
+    machines = []
+
+    for category_name, category_url in JCB_CATEGORIES.items():
+        base_path = urlparse(category_url).path
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  JCB ({category_name}) inaccessible : {e}")
+            continue
+
+        product_links = _jcb_product_links(page, base_path)
+        log.info(f"  JCB ({category_name}) → {len(product_links)} fiches trouvées")
+        category = normaliser_categorie(category_url, category_name)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            range_name = clean(page.title()).split("|")[0].strip()
+
+            for candidats in _machines_from_wide_table(tables[0], "JCB", category, range_name, url):
+                key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(candidats)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Valtra — valtra.fr (tracteurs)
+# Une page par série (pas de crawl catégorie -> produit). Le tableau specs
+# est "inversé" par rapport au format large classique : chaque LIGNE est un
+# modèle (ex. "T145"), avec un en-tête sur 2 lignes (regroupement + unité,
+# ex. "PUISSANCE MAX." -> "CH"/"kW"). On utilise la dernière ligne d'en-tête
+# (la plus fine) et on désambiguïse les libellés répétés (ex. deux "CH").
+# ─────────────────────────────────────────────────────────────────────────────
+
+VALTRA_SERIES = {
+    "Série A": "https://www.valtra.fr/produits/seriea.html",
+    "Série F": "https://www.valtra.fr/produits/serief.html",
+    "Série G": "https://www.valtra.fr/produits/serieg.html",
+    "Série N": "https://www.valtra.fr/produits/serien.html",
+    "Série T": "https://www.valtra.fr/produits/seriet.html",
+    "Série Q": "https://www.valtra.fr/produits/serieq.html",
+    "Série S": "https://www.valtra.fr/produits/series.html",
+}
+
+_VALTRA_MODEL_RE = re.compile(r"^[A-Za-z]{1,4}\s?-?\d")
+
+
+def _parse_valtra_series_table(table) -> dict:
+    rows = table.query_selector_all("tr")
+    if not rows:
+        return {}
+
+    header_rows = []
+    data_start = None
+    for idx, row in enumerate(rows):
+        cells = row.query_selector_all("td, th")
+        texts = [clean(c.inner_text()) for c in cells]
+        first = texts[0] if texts else ""
+        if first and _VALTRA_MODEL_RE.match(first):
+            data_start = idx
+            break
+        header_rows.append(texts)
+
+    if data_start is None or not header_rows:
+        return {}
+
+    header = header_rows[-1]
+    seen: dict = {}
+    labels = []
+    for i, h in enumerate(header):
+        label = h or f"col{i}"
+        if label in seen:
+            seen[label] += 1
+            label = f"{label} ({seen[label]})"
+        else:
+            seen[label] = 1
+        labels.append(label)
+
+    result = {}
+    for row in rows[data_start:]:
+        cells = row.query_selector_all("td, th")
+        texts = [clean(c.inner_text()) for c in cells]
+        if not texts or not texts[0]:
+            continue
+        model_name = texts[0]
+        specs = {}
+        for i, val in enumerate(texts[1:], start=1):
+            if i < len(labels) and val:
+                specs[labels[i]] = val
+        if specs:
+            result[model_name] = specs
+    return result
+
+
+def scrape_valtra(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les modèles Valtra non encore présents dans Neon."""
+    machines = []
+
+    for series_name, url in VALTRA_SERIES.items():
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3500)
+            for _ in range(6):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(300)
+        except Exception as e:
+            log.warning(f"  Valtra ({series_name}) inaccessible : {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        category = normaliser_categorie("tracteur")
+        models = _parse_valtra_series_table(tables[0])
+        log.info(f"  Valtra ({series_name}) → {len(models)} modèles trouvés")
+
+        for name, specs in models.items():
+            if not specs or len(name) < 2:
+                continue
+            key = f"Valtra|{name}|"
+            if key in existing_keys:
+                continue
+            m = Machine()
+            m.brand = "Valtra"
+            m.range = series_name
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.statut = "active"
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1726,6 +1930,8 @@ def run() -> int:
             ("Väderstad (vaderstad.com)", scrape_vaderstad),
             ("Lemken (lemken.com)", scrape_lemken),
             ("Kuhn (kuhn.fr)", scrape_kuhn),
+            ("JCB (jcb.com)", scrape_jcb),
+            ("Valtra (valtra.fr)", scrape_valtra),
         ]:
             log.info(f"Source : {nom_source}")
             try:
