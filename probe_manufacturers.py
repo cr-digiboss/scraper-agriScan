@@ -1,9 +1,15 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 7, round 2 :
-- Valtra, JCB, Bednar : catégorie -> fiche produit -> table specs
-- Grégoire Besson : fiche produit directe (petit catalogue) -> table specs
-- Manitou, Maschio Gaspardo, Rabe : correction d'URL (round 1 en échec)
+Lot 7, round 3 :
+- Valtra, Bednar : la page catégorie n'a pas donné de candidats sous-chemin
+  -> chercher des tables directement sur la page catégorie, et dumper
+  tous les liens (pas seulement sous-chemin) pour trouver le vrai pattern.
+- Manitou : catégorie -> fiche produit -> table
+- Maschio Gaspardo : debug pourquoi 0 liens malgré HTML de 1.3 Mo
+- Grégoire Besson : 2e fiche produit (prima = 0 table), pour confirmer
+  abandon ou trouver le vrai emplacement des specs
+- Rabe : abandonné (rabe.de = site sans rapport, marque absorbée par
+  Väderstad — pas de round supplémentaire)
 """
 
 import logging
@@ -15,20 +21,28 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def collect_links(page, netloc_hint):
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = []
-    seen = set()
-    for href in hrefs:
-        u = urlparse(href)
-        if netloc_hint not in u.netloc:
-            continue
-        clean = href.split("?")[0].split("#")[0]
-        if clean in seen or not clean:
-            continue
-        seen.add(clean)
-        links.append(clean)
-    return links
+def dump_all_links_and_tables(page, url, label):
+    log.info(f"\n===== {label} : {url} =====")
+    try:
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3500)
+        for _ in range(8):
+            page.mouse.wheel(0, 2000)
+            page.wait_for_timeout(300)
+        title = page.title()
+        log.info(f"  Titre : {title}")
+        tables = page.query_selector_all("table")
+        log.info(f"  Tables sur cette page : {len(tables)}")
+        for i, t in enumerate(tables[:2]):
+            txt = t.inner_text()
+            log.info(f"  --- table {i} ({len(txt)} car.) ---")
+            log.info("  " + txt[:400].replace("\n", " | "))
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        log.info(f"  Total liens bruts (a[href]) : {len(hrefs)}")
+        for h in hrefs[:15]:
+            log.info(f"    {h}")
+    except Exception as e:
+        log.info(f"  ERREUR : {e!r}")
 
 
 def inspect_product_page(page, url, label=""):
@@ -47,14 +61,6 @@ def inspect_product_page(page, url, label=""):
             txt = t.inner_text()
             log.info(f"       --- table {i} ({len(txt)} car.) ---")
             log.info("       " + txt[:400].replace("\n", " | "))
-        if not tables:
-            specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
-            log.info(f"       Éléments spec-like (sans table): {len(specish)}")
-            for i, el in enumerate(specish[:3]):
-                cls = el.get_attribute("class") or ""
-                txt = el.inner_text()
-                log.info(f"       --- elt {i} class=\"{cls}\" ({len(txt)} car.) ---")
-                log.info("       " + txt[:400].replace("\n", " | "))
     except Exception as e:
         log.info(f"       ERREUR : {e!r}")
 
@@ -68,32 +74,26 @@ def try_category(page, brand, category_url):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
         netloc_hint = urlparse(category_url).netloc.replace("www.", "")
-        links = collect_links(page, netloc_hint)
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         base_path = urlparse(category_url).path
-        candidates = [l for l in links if urlparse(l).path.rstrip("/") != base_path.rstrip("/") and urlparse(l).path.startswith(base_path)]
+        seen = set()
+        candidates = []
+        for href in hrefs:
+            u = urlparse(href)
+            if netloc_hint not in u.netloc:
+                continue
+            clean = href.split("?")[0].split("#")[0]
+            if clean in seen or urlparse(clean).path.rstrip("/") == base_path.rstrip("/"):
+                continue
+            if not urlparse(clean).path.startswith(base_path):
+                continue
+            seen.add(clean)
+            candidates.append(clean)
         log.info(f"  Candidats sous-chemin : {len(candidates)}")
         for c in candidates[:10]:
             log.info(f"    {c}")
         if candidates:
             inspect_product_page(page, candidates[0])
-    except Exception as e:
-        log.info(f"  ERREUR : {e!r}")
-
-
-def try_direct(page, brand, url):
-    log.info(f"\n===== {brand} (retry) : {url} =====")
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        title = page.title()
-        html_len = len(page.content())
-        log.info(f"  Titre : {title}")
-        log.info(f"  Longueur HTML : {html_len}")
-        netloc_hint = urlparse(url).netloc.replace("www.", "")
-        links = collect_links(page, netloc_hint)
-        log.info(f"  Liens internes uniques : {len(links)}")
-        for l in links[:20]:
-            log.info(f"    {l}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -111,14 +111,11 @@ def main():
         )
         page = context.new_page()
 
-        try_category(page, "Valtra", "https://www.valtra.fr/produits/serief.html")
-        try_category(page, "JCB", "https://www.jcb.com/fr-FR/products/machines/tracteurs/")
-        try_category(page, "Bednar", "https://www.bednar.com/fr/semoirs/")
-        inspect_product_page(page, "https://www.gregoire-besson.com/fr/machines/prima", "Grégoire Besson")
-
-        try_direct(page, "Manitou", "https://www.manitou.com/fr-FR")
-        try_direct(page, "Maschio Gaspardo", "https://www.maschio.com/fr/")
-        try_direct(page, "Rabe", "https://www.rabe.de/")
+        dump_all_links_and_tables(page, "https://www.valtra.fr/produits/serief.html", "Valtra serie F (page complète)")
+        dump_all_links_and_tables(page, "https://www.bednar.com/fr/semoirs/", "Bednar semoirs (page complète)")
+        try_category(page, "Manitou", "https://www.manitou.com/fr-FR/nos-machines/chariots-telescopiques")
+        dump_all_links_and_tables(page, "https://www.maschio.com/fr/", "Maschio Gaspardo (debug liens)")
+        inspect_product_page(page, "https://www.gregoire-besson.com/fr/machines/rover", "Grégoire Besson rover")
 
         page.close()
         browser.close()
