@@ -1,7 +1,6 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-John Deere, round 2 : la home a un format de locale différent
-(fr-fr, pas fr) -> repartir de la vraie home et chercher la nav produits.
+John Deere, round 3 : catégorie tracteurs -> fiche produit -> table specs.
 """
 
 import logging
@@ -12,7 +11,30 @@ from playwright.sync_api import sync_playwright
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-URL = "https://www.deere.fr/fr-fr"
+CATEGORY_URL = "https://www.deere.fr/fr-fr/produits-et-solutions/tracteurs"
+
+
+def inspect_product_page(page, url):
+    log.info(f"    -> ouverture fiche : {url}")
+    try:
+        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        for _ in range(6):
+            page.mouse.wheel(0, 2000)
+            page.wait_for_timeout(300)
+        title = page.title()
+        tables = page.query_selector_all("table")
+        log.info(f"       Titre: {title}")
+        log.info(f"       Tables trouvées: {len(tables)}")
+        for i, t in enumerate(tables[:2]):
+            txt = t.inner_text()
+            log.info(f"       --- table {i} ({len(txt)} car.) ---")
+            log.info("       " + txt[:400].replace("\n", " | "))
+        if not tables:
+            specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
+            log.info(f"       Éléments spec-like (sans table): {len(specish)}")
+    except Exception as e:
+        log.info(f"       ERREUR : {e!r}")
 
 
 def main():
@@ -27,38 +49,41 @@ def main():
             viewport={"width": 1280, "height": 1600},
         )
         page = context.new_page()
-        log.info(f"\n===== John Deere : {URL} =====")
+
+        log.info(f"\n===== Catégorie : {CATEGORY_URL} =====")
         try:
-            page.goto(URL, timeout=25000, wait_until="domcontentloaded")
+            page.goto(CATEGORY_URL, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(4000)
-            for _ in range(6):
+            for _ in range(8):
                 page.mouse.wheel(0, 2000)
                 page.wait_for_timeout(300)
             title = page.title()
             log.info(f"  Titre : {title}")
             hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+            base_path = urlparse(CATEGORY_URL).path
             seen = set()
-            samples = []
+            candidates = []
             for href in hrefs:
                 u = urlparse(href)
                 if "deere" not in u.netloc:
                     continue
-                if href in seen:
+                clean = href.split("?")[0].split("#")[0]
+                if clean in seen or urlparse(clean).path.rstrip("/") == base_path.rstrip("/"):
                     continue
-                seen.add(href)
-                samples.append(href)
-            log.info(f"  Total liens bruts : {len(hrefs)}")
-            log.info(f"  Liens internes uniques (deere) : {len(samples)}")
-            # Filtrer les liens qui ressemblent à des catégories produits
-            interessants = [s for s in samples if any(m in s.lower() for m in ["produit", "product", "tracteur", "machin", "equipement", "materiel"])]
-            log.info(f"  Liens 'produits'-like : {len(interessants)}")
-            for s in interessants[:30]:
-                log.info(f"    {s}")
-            log.info("  --- Tous les liens (échantillon) ---")
-            for s in samples[:40]:
-                log.info(f"    {s}")
+                if not urlparse(clean).path.startswith(base_path):
+                    continue
+                seen.add(clean)
+                candidates.append(clean)
+            log.info(f"  Candidats sous-chemin : {len(candidates)}")
+            for c in candidates[:20]:
+                log.info(f"    {c}")
+            if candidates:
+                inspect_product_page(page, candidates[0])
+                if len(candidates) > 1:
+                    inspect_product_page(page, candidates[1])
         except Exception as e:
             log.info(f"  ERREUR : {e!r}")
+
         page.close()
         browser.close()
 
