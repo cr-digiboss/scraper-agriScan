@@ -1877,6 +1877,151 @@ def scrape_valtra(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# John Deere — deere.fr
+# Catalogue actuel uniquement (pas TractorData, désactivé pour cette marque
+# car son historique complet est bien trop volumineux). Le site a deux
+# espaces d'URL pour la même arborescence : "/produits-et-solutions/..."
+# (catégories) et "/produits-solutions/..." (catégories ET fiches modèles
+# — les fiches modèles ont un suffixe de code aléatoire, ex.
+# ".../2032r-tracteur-compact-mtuzmurn"). La profondeur avant d'atteindre
+# une vraie fiche modèle varie selon la famille (2 à 3 niveaux), donc on
+# crawle récursivement et on ne garde que les pages dont le tableau de
+# specs est reconnaissable, plutôt que de fixer une profondeur fixe.
+# Format de tableau specific : chaque ligne a une seule cellule contenant
+# "libellé\n\nvaleur".
+# ─────────────────────────────────────────────────────────────────────────────
+
+JOHNDEERE_CATEGORIES = {
+    "Tracteurs": "https://www.deere.fr/fr-fr/produits-et-solutions/tracteurs",
+    "Récolte": "https://www.deere.fr/fr-fr/produits-et-solutions/recolte",
+    "Tondeuses": "https://www.deere.fr/fr-fr/produits-et-solutions/tondeuses",
+    "Gator": "https://www.deere.fr/fr-fr/produits-et-solutions/vehicules-utilitaires-gator",
+    "Foin et fourrage": "https://www.deere.fr/fr-fr/produits-et-solutions/equipement-pour-le-foin-et-le-fourrage",
+}
+
+# Profondeur maximale de crawl sous une catégorie (limite le temps total
+# si le site a une arborescence anormalement profonde ou cyclique).
+_JOHNDEERE_MAX_DEPTH = 3
+
+
+def _johndeere_sub_links(page, scope_segment: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "deere.fr" not in u.netloc:
+            continue
+        if "/produits-solutions/" not in href and "/produits-et-solutions/" not in href:
+            continue
+        if scope_segment not in u.path:
+            continue
+        links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_johndeere_spec_tables(tables) -> dict:
+    """Chaque ligne pertinente a une seule cellule au format
+    "libellé\\n\\nvaleur" (deux sauts de ligne entre le libellé et la
+    valeur). Les autres tables/lignes de la page (mise en page, galeries)
+    ne matchent pas ce format et sont ignorées."""
+    specs: dict = {}
+    for table in tables:
+        for row in table.query_selector_all("tr"):
+            cells = row.query_selector_all("td, th")
+            if len(cells) != 1:
+                continue
+            raw = cells[0].inner_text()
+            parts = [clean(p) for p in raw.split("\n\n") if clean(p)]
+            if len(parts) != 2:
+                continue
+            label, value = parts
+            if not label or not value:
+                continue
+            if label in specs:
+                n = 2
+                while f"{label} ({n})" in specs:
+                    n += 1
+                label = f"{label} ({n})"
+            specs[label] = value
+    return specs
+
+
+def scrape_johndeere(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles John Deere non encore présentes dans Neon."""
+    machines = []
+
+    for category_name, category_url in JOHNDEERE_CATEGORIES.items():
+        scope_segment = urlparse(category_url).path.rstrip("/").rsplit("/", 1)[-1]
+        visited: set = set()
+        to_visit: list = [(category_url, 0)]
+        found = 0
+
+        while to_visit:
+            url, depth = to_visit.pop()
+            if url in visited:
+                continue
+            visited.add(url)
+
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                for _ in range(6):
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(250)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            specs = _parse_johndeere_spec_tables(tables)
+
+            if len(specs) >= 3:
+                title = clean(page.title()).split("|")[0].strip()
+                # Le titre est "<modèle complet> <mot générique de catégorie>"
+                # (ex. "7R 330 Tracteur", "2032R Tracteur compact") : on
+                # coupe au premier mot générique connu pour garder tout
+                # l'identifiant du modèle (ex. "7R 330", pas juste "7R" —
+                # sinon deux variantes de puissance de la même série
+                # entreraient en collision sur la même clé).
+                name = re.split(
+                    r"\b(?:Tracteur|Moissonneuse|Tondeuse|Gator|Ensileuse|Presse|Faucheuse)\b",
+                    title,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip()
+                if not name:
+                    name = title.split(" ")[0] if title else ""
+                if not name or len(name) < 2:
+                    continue
+                key = f"John Deere|{name}|"
+                if key in existing_keys:
+                    continue
+                category = normaliser_categorie(category_name, url, title)
+                m = Machine()
+                m.brand = "John Deere"
+                m.range = title
+                m.name = name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                found += 1
+                log.info(f"    ✓ {name}")
+            elif depth < _JOHNDEERE_MAX_DEPTH:
+                for link in _johndeere_sub_links(page, scope_segment):
+                    if link not in visited:
+                        to_visit.append((link, depth + 1))
+
+            time.sleep(random.uniform(0.5, 1.2))
+
+        log.info(f"  John Deere ({category_name}) → {found} machines trouvées")
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -1944,6 +2089,7 @@ def run() -> int:
             ("Kuhn (kuhn.fr)", scrape_kuhn),
             ("JCB (jcb.com)", scrape_jcb),
             ("Valtra (valtra.fr)", scrape_valtra),
+            ("John Deere (deere.fr)", scrape_johndeere),
         ]:
             log.info(f"Source : {nom_source}")
             try:
