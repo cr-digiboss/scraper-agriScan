@@ -1,7 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-John Deere, round 1 : découverte de structure sur deere.com (catalogue
-actuel, pas TractorData qui est désactivé car trop volumineux/historique).
+John Deere, round 2 : la home a un format de locale différent
+(fr-fr, pas fr) -> repartir de la vraie home et chercher la nav produits.
 """
 
 import logging
@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-URL = "https://www.deere.fr/fr/agriculture/"
+URL = "https://www.deere.fr/fr-fr"
 
 
 def main():
@@ -30,7 +30,7 @@ def main():
         log.info(f"\n===== John Deere : {URL} =====")
         try:
             page.goto(URL, timeout=25000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3500)
+            page.wait_for_timeout(4000)
             for _ in range(6):
                 page.mouse.wheel(0, 2000)
                 page.wait_for_timeout(300)
@@ -49,6 +49,12 @@ def main():
                 samples.append(href)
             log.info(f"  Total liens bruts : {len(hrefs)}")
             log.info(f"  Liens internes uniques (deere) : {len(samples)}")
+            # Filtrer les liens qui ressemblent à des catégories produits
+            interessants = [s for s in samples if any(m in s.lower() for m in ["produit", "product", "tracteur", "machin", "equipement", "materiel"])]
+            log.info(f"  Liens 'produits'-like : {len(interessants)}")
+            for s in interessants[:30]:
+                log.info(f"    {s}")
+            log.info("  --- Tous les liens (échantillon) ---")
             for s in samples[:40]:
                 log.info(f"    {s}")
         except Exception as e:
