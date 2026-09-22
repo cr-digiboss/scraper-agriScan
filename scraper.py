@@ -34,7 +34,7 @@ BASE = "https://www.tractordata.com"
 # Marques scrapées → page listant tous les modèles de la marque.
 # Pour ajouter une marque : trouver sa page "tractor-brands" sur tractordata.com et l'ajouter ici.
 MARQUES = {
-    # "John Deere":    f"{BASE}/farm-tractors/tractor-brands/johndeere/johndeere-tractors.html",  # désactivé : catalogue trop volumineux
+    "John Deere":      f"{BASE}/farm-tractors/tractor-brands/johndeere/johndeere-tractors.html",
     "Massey Ferguson": f"{BASE}/farm-tractors/tractor-brands/massey-ferguson/massey-ferguson-tractors.html",
     "New Holland":     f"{BASE}/farm-tractors/tractor-brands/newholland/newholland-tractors.html",
     "Case IH":         f"{BASE}/farm-tractors/tractor-brands/caseih/caseih-tractors.html",
