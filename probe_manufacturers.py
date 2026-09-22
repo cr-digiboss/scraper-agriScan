@@ -1,8 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 8, round 2 :
-- Rauch, Lely, Same : ouvrir une vraie fiche produit et chercher une table
-- Sulky : connexion refusée au round 1 -> essayer d'autres URLs/domaines
+Lot 8, round 3 : Same a 0 table mais 55 éléments "spec-like" sur une
+fiche produit réelle -> dumper leur contenu pour comprendre la structure.
+Rauch (0 table/0 spec-like) et Lely (0 table/0 spec-like) : dernière
+vérification sur une 2e fiche avant abandon définitif.
+Sulky : domaine injoignable sur 5 variantes d'URL -> abandon confirmé,
+pas de round supplémentaire.
 """
 
 import logging
@@ -13,37 +16,37 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def inspect_product_page(page, url, label):
-    log.info(f"\n===== {label} : {url} =====")
+def dump_same_specs(page):
+    url = "https://www.same-tractors.com/en-gb/tractors/virtus"
+    log.info(f"\n===== Same specs : {url} =====")
+    page.goto(url, timeout=25000, wait_until="domcontentloaded")
+    page.wait_for_timeout(3000)
+    for _ in range(8):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(300)
+
+    specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
+    log.info(f"  Éléments spec-like : {len(specish)}")
+    for i, el in enumerate(specish[:8]):
+        cls = el.get_attribute("class") or ""
+        tag = el.evaluate("e => e.tagName")
+        txt = el.inner_text()
+        log.info(f"  --- elt {i} <{tag} class=\"{cls}\"> ({len(txt)} car.) ---")
+        log.info("  " + txt[:500].replace("\n", " | "))
+
+
+def inspect_second_page(page, url, label):
+    log.info(f"\n===== {label} (2e fiche) : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
         for _ in range(6):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
-        title = page.title()
         tables = page.query_selector_all("table")
-        log.info(f"  Titre: {title}")
-        log.info(f"  Tables trouvées: {len(tables)}")
-        for i, t in enumerate(tables[:2]):
-            txt = t.inner_text()
-            log.info(f"  --- table {i} ({len(txt)} car.) ---")
-            log.info("  " + txt[:400].replace("\n", " | "))
-        if not tables:
-            specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
-            log.info(f"  Éléments spec-like (sans table): {len(specish)}")
-    except Exception as e:
-        log.info(f"  ERREUR : {e!r}")
-
-
-def try_url(page, url, label):
-    log.info(f"\n===== {label} (retry) : {url} =====")
-    try:
-        page.goto(url, timeout=20000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2500)
-        title = page.title()
-        log.info(f"  Titre : {title}")
-        log.info(f"  Longueur HTML : {len(page.content())}")
+        specish = page.query_selector_all("[class*='spec' i], [class*='technical' i], [class*='caracteristique' i], [class*='donnee' i]")
+        log.info(f"  Titre: {page.title()}")
+        log.info(f"  Tables: {len(tables)} | Éléments spec-like: {len(specish)}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -61,14 +64,9 @@ def main():
         )
         page = context.new_page()
 
-        inspect_product_page(page, "https://rauch.de/duengerstreuer/scheibenstreuer/axent.html", "Rauch")
-        inspect_product_page(page, "https://www.lely.com/fr/solutions/traite/astronaut/", "Lely")
-        inspect_product_page(page, "https://www.same-tractors.com/en-gb/tractors/virtus", "Same")
-
-        try_url(page, "https://www.sulky-burel.com/", "Sulky racine https")
-        try_url(page, "http://www.sulky-burel.com/", "Sulky racine http")
-        try_url(page, "https://sulky-burel.com/", "Sulky sans www")
-        try_url(page, "https://www.sulky.fr/", "Sulky domaine alternatif")
+        dump_same_specs(page)
+        inspect_second_page(page, "https://rauch.de/duengerstreuer/scheibenstreuer/anbaustreuer/axis-m.html", "Rauch")
+        inspect_second_page(page, "https://www.lely.com/fr/solutions/alimentation/vector/", "Lely")
 
         page.close()
         browser.close()
