@@ -2183,6 +2183,96 @@ def scrape_kubota(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Krone — krone.fr (fenaison, récolte fourrage, transport)
+# Toutes les fiches produit sont listées directement dans le méga-menu de la
+# page /produits (une seule page à crawler, pas de catégorie par catégorie).
+# Les fiches ont un tableau large classique (_machines_from_wide_table) mais
+# avec deux pièges : une colonne "Configurer" (CTA répété sur chaque ligne,
+# pas un modèle) et, sur certaines pages, une 2e table parasite (sélecteur
+# de pays/langue) dont l'unique "modèle" est en réalité un gros bloc de texte
+# CSS/pays agrégé — filtrée par une limite de longueur sur le nom.
+# ─────────────────────────────────────────────────────────────────────────────
+
+KRONE_CATALOGUE_URL = "https://www.krone.fr/produits"
+
+
+def _krone_product_links(page: Page) -> set:
+    page.goto(KRONE_CATALOGUE_URL, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    for _ in range(10):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(250)
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        if "krone.fr" not in href:
+            continue
+        u = urlparse(href)
+        parts = [p for p in u.path.split("/") if p]
+        if len(parts) == 3 and parts[0] == "produits":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_krone(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape le catalogue France de Krone (krone.fr)."""
+    machines = []
+
+    try:
+        links = _krone_product_links(page)
+    except Exception as e:
+        log.warning(f"  Krone erreur page catalogue → {e}")
+        return machines
+
+    found = 0
+    for url in sorted(links):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+            for _ in range(8):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(250)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        title = clean(page.title()).split("|")[0].strip()
+        parts = [p for p in urlparse(url).path.split("/") if p]
+        category_slug = parts[1] if len(parts) > 1 else ""
+        category = normaliser_categorie(category_slug, title, url)
+
+        for table in tables:
+            page_machines = _machines_from_wide_table(table, "Krone", category, title, url)
+            for m in page_machines:
+                name = m.name.strip()
+                if name.lower() == "configurer" or len(name) > 60 or "{" in name:
+                    continue
+                # Table parasite (sélecteur pays/langue en pied de page) :
+                # ses libellés d'attribut sont en fait des définitions CSS
+                # (ex. ".cls-1{fill:none;}..."), jamais le cas sur une vraie
+                # fiche technique.
+                specs_dict = json.loads(m.specs)
+                if any("{" in k for k in specs_dict.keys()):
+                    continue
+                key = f"Krone|{m.name}|"
+                if key in existing_keys:
+                    continue
+                machines.append(m)
+                existing_keys.add(key)
+                found += 1
+                log.info(f"    ✓ {m.name}")
+
+        time.sleep(random.uniform(0.5, 1.2))
+
+    log.info(f"  Krone → {found} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2252,6 +2342,7 @@ def run() -> int:
             ("Valtra (valtra.fr)", scrape_valtra),
             ("John Deere (deere.fr)", scrape_johndeere),
             ("Kubota (ke.kubota-eu.com)", scrape_kubota),
+            ("Krone (krone.fr)", scrape_krone),
         ]:
             log.info(f"Source : {nom_source}")
             try:
