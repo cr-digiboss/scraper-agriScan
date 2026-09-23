@@ -1,12 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 9, round 2 : approfondissement par marque.
-- Horsch : fiche catégorie travail-du-sol/dechaumeur-a-disques (specs ?)
-- Krone : fiche modèle easycut-f (specs ?)
-- Merlo : fiche modèle ew25-5 (specs ?)
-- Monosem : cibler monosem.fr directement
-- Pellenc : chercher la bonne URL (pellenc.com racine, ou autre domaine)
-- Joskin : fiche catégorie épandeurs-de-lisier (liens modèles ?)
+Lot 9, round 3 :
+- Horsch : vérifier une page "campagne" (joker-ct) pour un vrai tableau
+  de specs, sinon confirmer PDF-only.
+- Merlo : trouver la bonne URL produit depuis la catégorie compacts.
+- Monosem : fiche modèle bineuse multicrop.
+- Pellenc : trouver la section produits/matériels réelle.
+- Joskin : chercher une fiche produit individuelle (pas juste la
+  catégorie), ex. via un lien direct type xtrem2/cobra2.
 """
 
 import logging
@@ -29,19 +30,17 @@ def inspect(page, label, url):
         tables = page.query_selector_all("table")
         log.info(f"  Titre : {title} — URL finale : {page.url}")
         log.info(f"  Tables : {len(tables)}")
-        for i, t in enumerate(tables[:3]):
+        for i, t in enumerate(tables[:2]):
             rows = t.query_selector_all("tr")
             log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
             for row in rows[:6]:
                 cells = row.query_selector_all("td, th")
                 texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
                 log.info("    " + " | ".join(texts))
-        specish = page.query_selector_all("[class*='spec' i]")
-        log.info(f"  Éléments class*=spec : {len(specish)}")
         hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         seen = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs))
-        log.info(f"  Liens uniques : {len(seen)} (30 premiers)")
-        for s in seen[:30]:
+        log.info(f"  Liens uniques : {len(seen)} (25 premiers)")
+        for s in seen[:25]:
             log.info(f"    {s}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
@@ -60,12 +59,11 @@ def main():
         )
         page = context.new_page()
 
-        inspect(page, "Horsch dechaumeur-a-disques", "https://www.horsch.com/fr/produits/travail-du-sol/dechaumeur-a-disques")
-        inspect(page, "Krone easycut-f", "https://www.krone.fr/produits/faucheuses-a-disques/easycut-f")
-        inspect(page, "Merlo ew25-5", "https://www.merlo.com/fr/fr/p/chariots-telescopiques/chariots-telescopiques-electriques/ew25-5/")
-        inspect(page, "Monosem.fr", "https://www.monosem.fr/")
-        inspect(page, "Pellenc racine", "https://www.pellenc.com/")
-        inspect(page, "Joskin épandeurs-de-lisier", "https://www.joskin.com/fr/%C3%A9pandeurs-de-lisier")
+        inspect(page, "Horsch joker-ct", "https://www.horsch.com/fr/dechaumage-rapide-economique-porte/campagne-joker-ct")
+        inspect(page, "Merlo compacts", "https://www.merlo.com/fr/fr/p/chariots-telescopiques/chariots-telescopiques-compacts/")
+        inspect(page, "Monosem multicrop", "https://www.monosem.fr/bineuses/bineuse-agricole/multicrop/")
+        inspect(page, "Pellenc conseils arboriculture", "https://www.pellenc.com/fr-fr/conseils-et-ingenierie/arboriculture")
+        inspect(page, "Joskin xtrem2 direct", "https://www.joskin.com/fr/xtrem2")
 
         page.close()
         browser.close()
