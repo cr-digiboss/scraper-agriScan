@@ -2096,7 +2096,17 @@ def _parse_kubota_models_table(container) -> dict:
 
         model_name = values[0]
         if decl_idx is not None and decl_idx < len(values) and values[decl_idx]:
-            model_name = f"{model_name} {values[decl_idx]}"
+            declinaison = values[decl_idx]
+            # Certaines fiches (ex. gamme "N" spécialisée) fusionnent les
+            # variantes Arceau et Cabine dans une seule ligne au lieu de
+            # deux lignes séparées (comme le fait le reste du site) : les
+            # valeurs des autres colonnes sont alors concaténées sans
+            # séparateur (ex. "94 ch96 ch") et impossibles à attribuer de
+            # façon fiable à l'une ou l'autre variante. On ignore la ligne
+            # plutôt que produire des specs erronées.
+            if "Arceau" in declinaison and "Cabine" in declinaison:
+                continue
+            model_name = f"{model_name} {declinaison}"
 
         specs = {}
         for i, val in enumerate(values[1:], start=1):
