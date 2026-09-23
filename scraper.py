@@ -2022,6 +2022,167 @@ def scrape_johndeere(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Kubota (ke.kubota-eu.com) : catalogue France sur un sous-domaine dédié
+# (kubota-eu.com/fr redirige avec un certificat invalide, kubota.com est le
+# site corporate global). Les fiches produit n'ont pas de vraies <table>
+# HTML : les caractéristiques sont dans un div.models-table stylé en
+# tableau (.row.thead pour l'en-tête, .row pour chaque variante). Chaque
+# cellule contient en plus un span.col-title parasite dont le texte est
+# une clé i18n mal alignée (ex. "Modello", "Hubraum / Zylinder" pour des
+# colonnes françaises) : il faut le retirer pour ne garder que la valeur
+# réelle en fin de cellule.
+# ─────────────────────────────────────────────────────────────────────────────
+
+KUBOTA_CATEGORIES = {
+    "Tracteurs agricoles": "https://ke.kubota-eu.com/agriculture/fr/product-category/tracteurs-agricoles/",
+    "Tracteurs spécialisés": "https://ke.kubota-eu.com/agriculture/fr/product-category/tracteurs-specialises/",
+    "Chargeurs frontaux": "https://ke.kubota-eu.com/agriculture/fr/product-category/chargeurs-frontaux/",
+    "Véhicules utilitaires": "https://ke.kubota-eu.com/agriculture/fr/product-category/vehicules-utilitaires/",
+    "Manutention": "https://ke.kubota-eu.com/agriculture/fr/product-category/manutention/",
+}
+
+
+def _kubota_product_links(page: Page, category_url: str) -> set:
+    page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    for _ in range(8):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(250)
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        if "kubota-eu.com" not in href:
+            continue
+        if "/agriculture/fr/products/" not in href:
+            continue
+        clean_href = href.split("?")[0].split("#")[0]
+        if clean_href.rstrip("/").endswith("/products"):
+            continue
+        links.add(clean_href)
+    return links
+
+
+def _parse_kubota_models_table(container) -> dict:
+    rows = container.query_selector_all(":scope > .row")
+    header: list = []
+    data_rows = []
+    for row in rows:
+        cls = row.get_attribute("class") or ""
+        cols = row.query_selector_all(":scope > .col")
+        if "thead" in cls:
+            header = [clean(c.inner_text()) for c in cols]
+        else:
+            data_rows.append(cols)
+    if not header or not data_rows:
+        return {}
+
+    decl_idx = header.index("Déclinaison") if "Déclinaison" in header else None
+
+    result: dict = {}
+    for cols in data_rows:
+        values = []
+        for c in cols:
+            title_el = c.query_selector(".col-title")
+            title_txt = clean(title_el.inner_text()) if title_el else ""
+            full_txt = clean(c.inner_text())
+            if title_txt and full_txt.startswith(title_txt):
+                val = full_txt[len(title_txt):].strip()
+            else:
+                val = full_txt
+            values.append(val)
+        if not values or not values[0]:
+            continue
+
+        model_name = values[0]
+        if decl_idx is not None and decl_idx < len(values) and values[decl_idx]:
+            declinaison = values[decl_idx]
+            # Certaines fiches (ex. gamme "N" spécialisée) fusionnent les
+            # variantes Arceau et Cabine dans une seule ligne au lieu de
+            # deux lignes séparées (comme le fait le reste du site) : les
+            # valeurs des autres colonnes sont alors concaténées sans
+            # séparateur (ex. "94 ch96 ch") et impossibles à attribuer de
+            # façon fiable à l'une ou l'autre variante. On ignore la ligne
+            # plutôt que produire des specs erronées.
+            if "Arceau" in declinaison and "Cabine" in declinaison:
+                continue
+            model_name = f"{model_name} {declinaison}"
+
+        specs = {}
+        for i, val in enumerate(values[1:], start=1):
+            if i < len(header) and val:
+                specs[header[i]] = val
+        if not specs:
+            continue
+
+        key = model_name
+        if key in result:
+            n = 2
+            while f"{key} ({n})" in result:
+                n += 1
+            key = f"{key} ({n})"
+        result[key] = specs
+
+    return result
+
+
+def scrape_kubota(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape le catalogue France de Kubota (ke.kubota-eu.com)."""
+    machines = []
+
+    for category_name, category_url in KUBOTA_CATEGORIES.items():
+        try:
+            links = _kubota_product_links(page, category_url)
+        except Exception as e:
+            log.warning(f"  Kubota ({category_name}) erreur catégorie → {e}")
+            continue
+
+        found = 0
+        for url in sorted(links):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+                for _ in range(8):
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(250)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            container = page.query_selector(".models-table")
+            if not container:
+                continue
+            models = _parse_kubota_models_table(container)
+            if not models:
+                continue
+
+            title = clean(page.title()).split("|")[0].strip()
+            category = normaliser_categorie(category_name, title, url)
+
+            for model_name, specs in models.items():
+                key = f"Kubota|{model_name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Kubota"
+                m.range = title
+                m.name = model_name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                found += 1
+                log.info(f"    ✓ {model_name}")
+
+            time.sleep(random.uniform(0.5, 1.2))
+
+        log.info(f"  Kubota ({category_name}) → {found} machines trouvées")
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2090,6 +2251,7 @@ def run() -> int:
             ("JCB (jcb.com)", scrape_jcb),
             ("Valtra (valtra.fr)", scrape_valtra),
             ("John Deere (deere.fr)", scrape_johndeere),
+            ("Kubota (ke.kubota-eu.com)", scrape_kubota),
         ]:
             log.info(f"Source : {nom_source}")
             try:
