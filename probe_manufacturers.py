@@ -1,12 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 3 :
-- Deutz-Fahr : inspecter le contenu réel des 17 éléments class*=spec sur
-  la page série (per-modèle exploitable ou marketing générique par
-  gamme, comme Case IH ?).
-- Mahindra : mahindra.eu est un domaine à vendre (parking page), les
-  autres essais échouent en DNS. Nouvelles tentatives ciblées France/
-  Europe avant abandon éventuel.
+Round 4 : Mahindra abandonné (aucun site France/Europe accessible après
+8 tentatives). On ne revalide que Deutz-Fahr (timeout transitoire au
+round précédent) pour voir le contenu réel des éléments class*=spec.
 """
 
 import logging
@@ -20,7 +16,7 @@ log = logging.getLogger("probe")
 def inspect_deutzfahr_specs(page, url):
     log.info(f"\n===== Deutz-Fahr specs : {url} =====")
     try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.goto(url, timeout=35000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
         for _ in range(10):
             page.mouse.wheel(0, 2000)
@@ -31,16 +27,6 @@ def inspect_deutzfahr_specs(page, url):
             txt = el.inner_text().strip().replace("\n", " | ")
             if txt:
                 log.info(f"  [{i}] {txt[:400]}")
-    except Exception as e:
-        log.info(f"  ERREUR : {e!r}")
-
-
-def try_url(page, label, url):
-    log.info(f"\n===== {label} : {url} =====")
-    try:
-        page.goto(url, timeout=20000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-        log.info(f"  OK — Titre : {page.title()} — URL finale : {page.url}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -59,16 +45,6 @@ def main():
         page = context.new_page()
 
         inspect_deutzfahr_specs(page, "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-9-stage-5")
-
-        log.info("\n===== Recherche Mahindra France/Europe (suite) =====")
-        for label, url in [
-            ("mahindra.fr", "https://www.mahindra.fr/"),
-            ("mahindra-tracteurs.fr", "https://www.mahindra-tracteurs.fr/"),
-            ("mahindra-tractors.eu", "https://www.mahindra-tractors.eu/"),
-            ("mahindra.com global", "https://www.mahindra.com/"),
-            ("mahindra farm division", "https://www.mahindrafarmdivision.com/"),
-        ]:
-            try_url(page, label, url)
 
         page.close()
         browser.close()
