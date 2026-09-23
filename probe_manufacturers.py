@@ -1,9 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Kubota, round 6 :
-- La fiche produit m4003 n'a aucune <table> et un seul élément
-  class*=spec (contenu à inspecter). Vérifier si les caractéristiques
-  sont dans un onglet/accordéon chargé par JS, un PDF, ou ailleurs.
+Kubota, round 7 :
+- Le bloc "Modèle | Puissance | Déclinaison | Transmission | Cylindrée"
+  n'est PAS une <table> HTML mais un composant div stylé en tableau
+  (a matché [class*='tab' i], donc une classe contenant "table").
+  Il faut trouver la vraie structure DOM (classes, balises des lignes
+  et cellules) pour pouvoir écrire un parseur.
 """
 
 import logging
@@ -14,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def inspect_kubota_full(page, url):
-    log.info(f"\n===== Kubota produit (détaillé) : {url} =====")
+def inspect_kubota_dom(page, url):
+    log.info(f"\n===== Kubota DOM : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
@@ -23,37 +25,21 @@ def inspect_kubota_full(page, url):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
 
-        # contenu du seul élément class*=spec trouvé au round précédent
-        specish = page.query_selector_all("[class*='spec' i]")
-        log.info(f"  Éléments class*=spec : {len(specish)}")
-        for el in specish:
-            log.info("  --- contenu ---")
-            log.info("  " + el.inner_text()[:1500].replace("\n", " | "))
-
-        # chercher des onglets / accordéons
-        tabs = page.query_selector_all("[role='tab'], .tab, .tabs, [class*='tab' i], [class*='accordion' i]")
-        log.info(f"  Éléments tab/accordion-like : {len(tabs)}")
-        for el in tabs[:10]:
-            txt = el.inner_text().strip().replace("\n", " ")[:80]
-            log.info(f"    {txt}")
-
-        # chercher des liens PDF
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        pdfs = [h for h in hrefs if ".pdf" in h.lower()]
-        log.info(f"  Liens PDF : {len(pdfs)}")
-        for p in pdfs[:10]:
-            log.info(f"    {p}")
-
-        # chercher un mot-clé "caractéristiques" / "spécifications" dans le texte de la page
-        body_text = page.inner_text("body")
-        for kw in ["Caractéristiques", "Spécifications", "Fiche technique"]:
-            idx = body_text.find(kw)
-            log.info(f"  Occurrence '{kw}' à l'index {idx}")
-            if idx >= 0:
-                log.info("    Contexte : " + body_text[idx:idx+300].replace("\n", " | "))
-
-        # nombre total d'éléments <div> pour se faire une idée de la densité JS
-        log.info(f"  Longueur totale du texte body : {len(body_text)}")
+        # trouver précisément l'élément conteneur du "tableau" de modèles
+        candidates = page.query_selector_all("[class*='table' i]")
+        log.info(f"  Éléments class*=table : {len(candidates)}")
+        for el in candidates:
+            txt = el.inner_text().strip().replace("\n", " ")
+            if "Modèle" in txt and "Puissance" in txt:
+                cls = el.get_attribute("class")
+                tag = el.evaluate("e => e.tagName")
+                log.info(f"  >>> Conteneur trouvé : <{tag} class='{cls}'>")
+                # structure des enfants directs
+                outer = el.evaluate("e => e.outerHTML")
+                log.info(f"  Longueur outerHTML : {len(outer)}")
+                log.info("  outerHTML (premiers 3000 car.) :")
+                log.info("  " + outer[:3000])
+                break
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -71,7 +57,7 @@ def main():
         )
         page = context.new_page()
 
-        inspect_kubota_full(page, "https://ke.kubota-eu.com/agriculture/fr/products/m4003/")
+        inspect_kubota_dom(page, "https://ke.kubota-eu.com/agriculture/fr/products/m4003/")
 
         page.close()
         browser.close()
