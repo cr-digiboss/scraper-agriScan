@@ -2252,6 +2252,13 @@ def scrape_krone(page: Page, existing_keys: set) -> list[Machine]:
                 name = m.name.strip()
                 if name.lower() == "configurer" or len(name) > 60 or "{" in name:
                     continue
+                # Table parasite (sélecteur pays/langue en pied de page) :
+                # ses libellés d'attribut sont en fait des définitions CSS
+                # (ex. ".cls-1{fill:none;}..."), jamais le cas sur une vraie
+                # fiche technique.
+                specs_dict = json.loads(m.specs)
+                if any("{" in k for k in specs_dict.keys()):
+                    continue
                 key = f"Krone|{m.name}|"
                 if key in existing_keys:
                     continue
