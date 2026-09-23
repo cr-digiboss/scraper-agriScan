@@ -1,10 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 2 :
-- Deutz-Fahr : vérifier le format specs sur une fiche série (serie-9-stage-5).
-- Mahindra : mahindratractor.com est le site indien (prix roupies, "Duniya
-  Vich Ikko Lalkaar" en pendjabi) — pas pertinent pour un catalogue France/
-  Europe. Chercher un site Mahindra Europe/France.
+Round 3 :
+- Deutz-Fahr : inspecter le contenu réel des 17 éléments class*=spec sur
+  la page série (per-modèle exploitable ou marketing générique par
+  gamme, comme Case IH ?).
+- Mahindra : mahindra.eu est un domaine à vendre (parking page), les
+  autres essais échouent en DNS. Nouvelles tentatives ciblées France/
+  Europe avant abandon éventuel.
 """
 
 import logging
@@ -15,35 +17,20 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def inspect_deutzfahr(page, url):
-    log.info(f"\n===== Deutz-Fahr : {url} =====")
+def inspect_deutzfahr_specs(page, url):
+    log.info(f"\n===== Deutz-Fahr specs : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
         for _ in range(10):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
-        title = page.title()
-        tables = page.query_selector_all("table")
-        log.info(f"  Titre : {title}")
-        log.info(f"  Tables : {len(tables)}")
-        for i, t in enumerate(tables[:4]):
-            rows = t.query_selector_all("tr")
-            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
-            for row in rows[:6]:
-                cells = row.query_selector_all("td, th")
-                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
-                log.info("    " + " | ".join(texts))
         specish = page.query_selector_all("[class*='spec' i]")
         log.info(f"  Éléments class*=spec : {len(specish)}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        model_links = sorted(set(
-            h.split("?")[0].split("#")[0] for h in hrefs
-            if "deutz-fahr.com/fr-fr/tracteurs/" in h
-        ))
-        log.info(f"  Sous-liens tracteurs sur cette page : {len(model_links)}")
-        for m in model_links[:20]:
-            log.info(f"    {m}")
+        for i, el in enumerate(specish):
+            txt = el.inner_text().strip().replace("\n", " | ")
+            if txt:
+                log.info(f"  [{i}] {txt[:400]}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -71,15 +58,15 @@ def main():
         )
         page = context.new_page()
 
-        inspect_deutzfahr(page, "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-9-stage-5")
+        inspect_deutzfahr_specs(page, "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-9-stage-5")
 
-        log.info("\n===== Recherche Mahindra Europe =====")
+        log.info("\n===== Recherche Mahindra France/Europe (suite) =====")
         for label, url in [
-            ("mahindra.eu", "https://www.mahindra.eu/"),
-            ("mahindra-agri.eu", "https://www.mahindra-agri.eu/"),
-            ("eu.mahindra.com", "https://eu.mahindra.com/"),
-            ("mahindratractors.eu", "https://www.mahindratractors.eu/"),
-            ("mahindra.com agri", "https://www.mahindra.com/farm-equipment"),
+            ("mahindra.fr", "https://www.mahindra.fr/"),
+            ("mahindra-tracteurs.fr", "https://www.mahindra-tracteurs.fr/"),
+            ("mahindra-tractors.eu", "https://www.mahindra-tractors.eu/"),
+            ("mahindra.com global", "https://www.mahindra.com/"),
+            ("mahindra farm division", "https://www.mahindrafarmdivision.com/"),
         ]:
             try_url(page, label, url)
 
