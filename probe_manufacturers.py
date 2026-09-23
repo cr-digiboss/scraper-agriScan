@@ -1,11 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH / Kubota, round 4 :
-- Case IH : vérifier une 2e fiche (Farmall, plus petite gamme utilitaire)
-  pour voir si toutes les pages sont des bannières marketing à 4 specs
-  génériques, ou si certaines ont un vrai tableau détaillé par modèle.
-- Kubota : suivre vers ke.kubota-eu.com/agriculture/fr/ (sous-domaine
-  français trouvé au round 3).
+Kubota, round 5 :
+- Case IH abandonné (round 4) : données uniquement au niveau "gamme"
+  (4 attributs génériques, souvent des plages ex. "355-404 ch"), aucun
+  modèle individuel exploitable.
+- Kubota : vérifier une fiche produit individuelle (m4003) pour voir si
+  elle contient un vrai tableau de specs, puis lister les liens produits
+  de la catégorie tracteurs-agricoles pour connaître le volume.
 """
 
 import logging
@@ -17,52 +18,52 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def inspect_caseih(page, url):
-    log.info(f"\n===== Case IH : {url} =====")
+def inspect_kubota_product(page, url):
+    log.info(f"\n===== Kubota produit : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
-        for _ in range(8):
+        for _ in range(10):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
         title = page.title()
         tables = page.query_selector_all("table")
         log.info(f"  Titre : {title}")
         log.info(f"  Tables : {len(tables)}")
-        specish = page.query_selector_all("[class*='hero-banner__specs' i]")
-        log.info(f"  Éléments hero-banner__specs : {len(specish)}")
-        for el in specish[:6]:
-            txt = el.inner_text()
-            log.info("    " + txt.replace("\n", " | "))
+        for i, t in enumerate(tables[:5]):
+            rows = t.query_selector_all("tr")
+            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
+            for row in rows[:6]:
+                cells = row.query_selector_all("td, th")
+                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
+                log.info("    " + " | ".join(texts))
+        # fallback : chercher des blocs de specs hors table
+        specish = page.query_selector_all("[class*='spec' i]")
+        log.info(f"  Éléments class*=spec : {len(specish)}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
 
-def explore_kubota_fr(page):
-    url = "https://ke.kubota-eu.com/agriculture/fr/"
-    log.info(f"\n===== Kubota FR : {url} =====")
+def list_kubota_category(page, url):
+    log.info(f"\n===== Kubota catégorie : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        for _ in range(8):
+        page.wait_for_timeout(3000)
+        for _ in range(10):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
-        title = page.title()
-        log.info(f"  Titre : {title}")
         hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         seen = set()
-        samples = []
         for href in hrefs:
             u = urlparse(href)
-            if "kubota" not in u.netloc:
+            if "kubota-eu.com" not in u.netloc:
+                continue
+            if "/agriculture/fr/products/" not in href:
                 continue
             clean = href.split("?")[0].split("#")[0]
-            if clean in seen:
-                continue
             seen.add(clean)
-            samples.append(clean)
-        log.info(f"  Liens internes uniques : {len(samples)}")
-        for s in samples[:40]:
+        log.info(f"  Liens produits uniques : {len(seen)}")
+        for s in sorted(seen):
             log.info(f"    {s}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
@@ -81,8 +82,8 @@ def main():
         )
         page = context.new_page()
 
-        inspect_caseih(page, "https://www.caseih.com/fr-fr/france/produits/tracteurs/gamme-farmall")
-        explore_kubota_fr(page)
+        inspect_kubota_product(page, "https://ke.kubota-eu.com/agriculture/fr/products/m4003/")
+        list_kubota_category(page, "https://ke.kubota-eu.com/agriculture/fr/product-category/tracteurs-agricoles/")
 
         page.close()
         browser.close()
