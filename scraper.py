@@ -2391,6 +2391,129 @@ def scrape_guttler(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Actisol — actisol-agri.fr (travail du sol : fissuration, déchaumage,
+# strip-till, entretien des prairies, viticulture, maraîchage)
+# Les pages catégorie listent directement les fiches produit (pas de
+# sous-catégorie à crawler séparément). Même format de tableau que Güttler :
+# 1re ligne = en-tête ("Désignation" + attributs), chaque ligne suivante =
+# un modèle (col 0 = désignation, ex. "D255").
+# ─────────────────────────────────────────────────────────────────────────────
+
+ACTISOL_CATEGORIES = {
+    "Grande culture": "https://actisol-agri.fr/categorie-produit/grande-culture/",
+    "Viticulture": "https://actisol-agri.fr/categorie-produit/viticulture/",
+    "Maraîchage": "https://actisol-agri.fr/categorie-produit/maraichage/",
+    "Espace vert": "https://actisol-agri.fr/categorie-produit/espace-vert/",
+}
+
+
+def _actisol_product_links(page: Page, category_url: str) -> set:
+    page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    for _ in range(10):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(250)
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        if "actisol-agri.fr/produit/" not in href:
+            continue
+        links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_actisol_specs_table(table) -> dict:
+    """Table où la 1re ligne est l'en-tête et chaque ligne suivante est un
+    modèle (col 0 = désignation du modèle, colonnes suivantes = valeurs)."""
+    rows = table.query_selector_all("tr")
+    if len(rows) < 2:
+        return {}
+    header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+    if not header or not header[0]:
+        return {}
+    result = {}
+    for row in rows[1:]:
+        cells = row.query_selector_all("td, th")
+        if not cells:
+            continue
+        model_name = clean(cells[0].inner_text())
+        if not model_name:
+            continue
+        specs = {}
+        for i, cell in enumerate(cells[1:], start=1):
+            if i < len(header) and header[i]:
+                val = clean(cell.inner_text())
+                if val:
+                    specs[header[i]] = val
+        if not specs:
+            continue
+        key = model_name
+        if key in result:
+            n = 2
+            while f"{key} ({n})" in result:
+                n += 1
+            key = f"{key} ({n})"
+        result[key] = specs
+    return result
+
+
+def scrape_actisol(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape le catalogue France d'Actisol (actisol-agri.fr)."""
+    machines = []
+
+    for category_name, category_url in ACTISOL_CATEGORIES.items():
+        try:
+            links = _actisol_product_links(page, category_url)
+        except Exception as e:
+            log.warning(f"  Actisol ({category_name}) erreur catégorie → {e}")
+            continue
+
+        found = 0
+        for url in sorted(links):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+                for _ in range(8):
+                    page.mouse.wheel(0, 2000)
+                    page.wait_for_timeout(250)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            title = clean(page.title()).split("-")[0].strip()
+            category = normaliser_categorie(category_name, title, url)
+
+            for table in tables:
+                models = _parse_actisol_specs_table(table)
+                for model_name, specs in models.items():
+                    key = f"Actisol|{model_name}|"
+                    if key in existing_keys:
+                        continue
+                    m = Machine()
+                    m.brand = "Actisol"
+                    m.range = title
+                    m.name = model_name
+                    m.category = category
+                    m.sourceUrl = url
+                    m.statut = "active"
+                    m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                    machines.append(m)
+                    existing_keys.add(key)
+                    found += 1
+                    log.info(f"    ✓ {model_name}")
+
+            time.sleep(random.uniform(0.5, 1.2))
+
+        log.info(f"  Actisol ({category_name}) → {found} machines trouvées")
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2462,6 +2585,7 @@ def run() -> int:
             ("Kubota (ke.kubota-eu.com)", scrape_kubota),
             ("Krone (krone.fr)", scrape_krone),
             ("Güttler (guttler.org)", scrape_guttler),
+            ("Actisol (actisol-agri.fr)", scrape_actisol),
         ]:
             log.info(f"Source : {nom_source}")
             try:
