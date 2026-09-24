@@ -1,7 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Güttler, round 4 : version française (guttler.org/fr/) + format specs
-sur une fiche catégorie produit (packerwalzen).
+Güttler, round 5 : la page catégorie allemande (sub.guttler.org) n'a
+que des tableaux de cookies RGPD, pas de vraies specs. Exploration de
+la section produits du site français (guttler.org/fr/produits/), plus
+récent (relaunch 2022), qui a peut-être une structure différente.
 """
 
 import logging
@@ -24,13 +26,8 @@ def explore(page, label, url):
         tables = page.query_selector_all("table")
         log.info(f"  Titre : {title} — URL finale : {page.url}")
         log.info(f"  Tables : {len(tables)}")
-        for i, t in enumerate(tables[:2]):
-            rows = t.query_selector_all("tr")
-            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
-            for row in rows[:6]:
-                cells = row.query_selector_all("td, th")
-                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
-                log.info("    " + " | ".join(texts))
+        divtables = page.query_selector_all("[class*='table' i], [class*='spec' i]")
+        log.info(f"  Éléments class*=table/spec : {len(divtables)}")
         hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         seen = []
         for href in hrefs:
@@ -57,9 +54,7 @@ def main():
         )
         page = context.new_page()
 
-        explore(page, "Güttler FR", "https://guttler.org/fr/")
-        explore(page, "Güttler packerwalzen (catégorie DE)",
-               "https://sub.guttler.org/de/produkt-uebersicht/packerwalzen")
+        explore(page, "Güttler FR produits", "https://guttler.org/fr/produits/")
 
         page.close()
         browser.close()
