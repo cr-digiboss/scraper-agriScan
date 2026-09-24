@@ -1,9 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Güttler, round 5 : la page catégorie allemande (sub.guttler.org) n'a
-que des tableaux de cookies RGPD, pas de vraies specs. Exploration de
-la section produits du site français (guttler.org/fr/produits/), plus
-récent (relaunch 2022), qui a peut-être une structure différente.
+Güttler, round 6 : format specs sur une vraie fiche produit française
+(greenmaster-600-750-800 et master-et-magnum).
 """
 
 import logging
@@ -14,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def explore(page, label, url):
+def inspect(page, label, url):
     log.info(f"\n===== {label} : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
@@ -26,17 +24,19 @@ def explore(page, label, url):
         tables = page.query_selector_all("table")
         log.info(f"  Titre : {title} — URL finale : {page.url}")
         log.info(f"  Tables : {len(tables)}")
-        divtables = page.query_selector_all("[class*='table' i], [class*='spec' i]")
-        log.info(f"  Éléments class*=table/spec : {len(divtables)}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        seen = []
-        for href in hrefs:
-            h = href.split("?")[0].split("#")[0]
-            if h not in seen:
-                seen.append(h)
-        log.info(f"  Liens uniques : {len(seen)}")
-        for s in seen[:60]:
-            log.info(f"    {s}")
+        for i, t in enumerate(tables[:3]):
+            rows = t.query_selector_all("tr")
+            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
+            for row in rows[:10]:
+                cells = row.query_selector_all("td, th")
+                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
+                log.info("    " + " | ".join(texts))
+        divtables = page.query_selector_all("[class*='table' i]")
+        log.info(f"  Éléments class*=table : {len(divtables)}")
+        for el in divtables[:5]:
+            cls = el.get_attribute("class")
+            txt = el.inner_text().strip().replace("\n", " | ")[:300]
+            log.info(f"    <{cls}> {txt}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -54,7 +54,10 @@ def main():
         )
         page = context.new_page()
 
-        explore(page, "Güttler FR produits", "https://guttler.org/fr/produits/")
+        inspect(page, "Güttler Greenmaster 600/750/800",
+               "https://guttler.org/fr/produit/greenmaster-600-750-800/")
+        inspect(page, "Güttler Master et Magnum",
+               "https://guttler.org/fr/produit/master-et-magnum/")
 
         page.close()
         browser.close()
