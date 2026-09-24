@@ -2273,6 +2273,124 @@ def scrape_krone(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Güttler — guttler.org (rouleaux, packers, préparation du lit de semis)
+# Piège découvert pendant le sondage : guttler.com appartient à un musicien
+# homonyme (Ludwig Güttler), rien à voir avec le fabricant — le vrai site est
+# guttler.org. La page catalogue française (/fr/produits/) liste directement
+# les fiches produit (pas de pagination, catalogue FR plus restreint que le
+# site allemand). Les fiches ont un vrai tableau WooCommerce/TablePress,
+# mais au format "chaque ligne = un modèle" (comme Valtra), pas le format
+# large classique — d'où un parseur dédié.
+# ─────────────────────────────────────────────────────────────────────────────
+
+GUTTLER_CATALOGUE_URL = "https://guttler.org/fr/produits/"
+
+
+def _guttler_product_links(page: Page) -> set:
+    page.goto(GUTTLER_CATALOGUE_URL, timeout=30000, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    for _ in range(10):
+        page.mouse.wheel(0, 2000)
+        page.wait_for_timeout(250)
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        if "guttler.org/fr/produit/" not in href:
+            continue
+        links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _parse_guttler_specs_table(table) -> dict:
+    """Table où la 1re ligne est l'en-tête et chaque ligne suivante est un
+    modèle (col 0 = nom du modèle, colonnes suivantes = valeurs)."""
+    rows = table.query_selector_all("tr")
+    if len(rows) < 2:
+        return {}
+    header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+    if not header or not header[0]:
+        return {}
+    result = {}
+    for row in rows[1:]:
+        cells = row.query_selector_all("td, th")
+        if not cells:
+            continue
+        model_name = clean(cells[0].inner_text())
+        if not model_name:
+            continue
+        specs = {}
+        for i, cell in enumerate(cells[1:], start=1):
+            if i < len(header) and header[i]:
+                val = clean(cell.inner_text())
+                if val:
+                    specs[header[i]] = val
+        if not specs:
+            continue
+        key = model_name
+        if key in result:
+            n = 2
+            while f"{key} ({n})" in result:
+                n += 1
+            key = f"{key} ({n})"
+        result[key] = specs
+    return result
+
+
+def scrape_guttler(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape le catalogue France de Güttler (guttler.org)."""
+    machines = []
+
+    try:
+        links = _guttler_product_links(page)
+    except Exception as e:
+        log.warning(f"  Güttler erreur page catalogue → {e}")
+        return machines
+
+    found = 0
+    for url in sorted(links):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+            for _ in range(8):
+                page.mouse.wheel(0, 2000)
+                page.wait_for_timeout(250)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        title = clean(page.title()).split("–")[0].strip()
+        category = normaliser_categorie(title, url)
+
+        for table in tables:
+            models = _parse_guttler_specs_table(table)
+            for model_name, specs in models.items():
+                key = f"Güttler|{model_name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Güttler"
+                m.range = title
+                m.name = model_name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                found += 1
+                log.info(f"    ✓ {model_name}")
+
+        time.sleep(random.uniform(0.5, 1.2))
+
+    log.info(f"  Güttler → {found} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2343,6 +2461,7 @@ def run() -> int:
             ("John Deere (deere.fr)", scrape_johndeere),
             ("Kubota (ke.kubota-eu.com)", scrape_kubota),
             ("Krone (krone.fr)", scrape_krone),
+            ("Güttler (guttler.org)", scrape_guttler),
         ]:
             log.info(f"Source : {nom_source}")
             try:
