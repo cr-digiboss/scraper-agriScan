@@ -1,7 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Actisol, round 2 : exploration catégorie grande-culture (liens produits,
-format specs).
+Actisol, round 3 : format specs sur une vraie fiche produit
+(Demeter et Stellaïr).
 """
 
 import logging
@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def explore(page, label, url):
+def inspect(page, label, url):
     log.info(f"\n===== {label} : {url} =====")
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
@@ -24,15 +24,15 @@ def explore(page, label, url):
         tables = page.query_selector_all("table")
         log.info(f"  Titre : {title} — URL finale : {page.url}")
         log.info(f"  Tables : {len(tables)}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        seen = []
-        for href in hrefs:
-            h = href.split("?")[0].split("#")[0]
-            if h not in seen:
-                seen.append(h)
-        log.info(f"  Liens uniques : {len(seen)}")
-        for s in seen[:70]:
-            log.info(f"    {s}")
+        for i, t in enumerate(tables[:3]):
+            rows = t.query_selector_all("tr")
+            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
+            for row in rows[:10]:
+                cells = row.query_selector_all("td, th")
+                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
+                log.info("    " + " | ".join(texts))
+        divtables = page.query_selector_all("[class*='table' i]")
+        log.info(f"  Éléments class*=table : {len(divtables)}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -50,7 +50,8 @@ def main():
         )
         page = context.new_page()
 
-        explore(page, "Actisol grande-culture", "https://actisol-agri.fr/categorie-produit/grande-culture/")
+        inspect(page, "Actisol Demeter", "https://actisol-agri.fr/produit/demeter-fissurateur-actisol/")
+        inspect(page, "Actisol Stellaïr", "https://actisol-agri.fr/produit/stellair-grande-culture/")
 
         page.close()
         browser.close()
