@@ -1,44 +1,17 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Güttler, round 6 : format specs sur une vraie fiche produit française
-(greenmaster-600-750-800 et master-et-magnum).
+Güttler, round 7 : vérifier une éventuelle pagination sur la page
+produits française (12 fiches trouvées semble faible vu les 8+
+catégories du site allemand — Frontpacker, Packerwalzen, etc.).
 """
 
 import logging
+import re
 
 from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
-
-
-def inspect(page, label, url):
-    log.info(f"\n===== {label} : {url} =====")
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-        for _ in range(10):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(300)
-        title = page.title()
-        tables = page.query_selector_all("table")
-        log.info(f"  Titre : {title} — URL finale : {page.url}")
-        log.info(f"  Tables : {len(tables)}")
-        for i, t in enumerate(tables[:3]):
-            rows = t.query_selector_all("tr")
-            log.info(f"  --- Table {i} ({len(rows)} lignes) ---")
-            for row in rows[:10]:
-                cells = row.query_selector_all("td, th")
-                texts = [c.inner_text().strip().replace("\n", " ") for c in cells]
-                log.info("    " + " | ".join(texts))
-        divtables = page.query_selector_all("[class*='table' i]")
-        log.info(f"  Éléments class*=table : {len(divtables)}")
-        for el in divtables[:5]:
-            cls = el.get_attribute("class")
-            txt = el.inner_text().strip().replace("\n", " | ")[:300]
-            log.info(f"    <{cls}> {txt}")
-    except Exception as e:
-        log.info(f"  ERREUR : {e!r}")
 
 
 def main():
@@ -54,10 +27,33 @@ def main():
         )
         page = context.new_page()
 
-        inspect(page, "Güttler Greenmaster 600/750/800",
-               "https://guttler.org/fr/produit/greenmaster-600-750-800/")
-        inspect(page, "Güttler Master et Magnum",
-               "https://guttler.org/fr/produit/master-et-magnum/")
+        url = "https://guttler.org/fr/produits/"
+        log.info(f"\n===== {url} =====")
+        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        for _ in range(15):
+            page.mouse.wheel(0, 3000)
+            page.wait_for_timeout(300)
+
+        body_text = page.inner_text("body")
+        log.info(f"  Longueur texte body : {len(body_text)}")
+        # chercher des indices de pagination
+        for kw in ["page 2", "Page 2", "Suivant", "suivant", "»", "Charger plus", "charger plus"]:
+            if kw in body_text:
+                idx = body_text.find(kw)
+                log.info(f"  Trouvé '{kw}' à l'index {idx} : ...{body_text[max(0,idx-80):idx+80]}...")
+
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        page_links = sorted(set(h for h in hrefs if re.search(r"/page/\d+", h) or "paged=" in h))
+        log.info(f"  Liens de pagination détectés : {len(page_links)}")
+        for p_ in page_links:
+            log.info(f"    {p_}")
+
+        product_links = sorted(set(
+            h.split("?")[0].split("#")[0] for h in hrefs
+            if "guttler.org/fr/produit/" in h
+        ))
+        log.info(f"  Total liens produits sur cette page : {len(product_links)}")
 
         page.close()
         browser.close()
