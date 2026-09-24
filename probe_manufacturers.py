@@ -1,6 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Güttler, round 1 : exploration initiale du site officiel.
+Güttler, round 2 : guettler.com est le site d'un musicien (Ludwig
+Güttler), pas le fabricant agricole (rouleaux/packers, gamme connue
+"Green Master"). Recherche du vrai domaine.
 """
 
 import logging
@@ -11,25 +13,12 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
 
-def explore(page, label, url):
+def try_url(page, label, url):
     log.info(f"\n===== {label} : {url} =====")
     try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-        for _ in range(8):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(300)
-        title = page.title()
-        log.info(f"  Titre : {title} — URL finale : {page.url}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        seen = []
-        for href in hrefs:
-            h = href.split("?")[0].split("#")[0]
-            if h not in seen:
-                seen.append(h)
-        log.info(f"  Liens uniques : {len(seen)}")
-        for s in seen[:60]:
-            log.info(f"    {s}")
+        page.goto(url, timeout=20000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        log.info(f"  OK — Titre : {page.title()} — URL finale : {page.url}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
 
@@ -47,7 +36,16 @@ def main():
         )
         page = context.new_page()
 
-        explore(page, "Güttler", "https://www.guettler.com/fr/")
+        for label, url in [
+            ("guettler-agrar.de", "https://www.guettler-agrar.de/"),
+            ("guettler-bodenbearbeitung.de", "https://www.guettler-bodenbearbeitung.de/"),
+            ("hguettler.de", "https://www.hguettler.de/"),
+            ("greenmaster-guettler.com", "https://www.greenmaster-guettler.com/"),
+            ("guettler-agri.fr", "https://www.guettler-agri.fr/"),
+            ("guettler.fr", "https://www.guettler.fr/"),
+            ("guettler-gmbh.de", "https://www.guettler-gmbh.de/"),
+        ]:
+            try_url(page, label, url)
 
         page.close()
         browser.close()
