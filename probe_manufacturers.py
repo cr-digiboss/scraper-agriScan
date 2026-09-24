@@ -1,7 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Actisol, round 1 : exploration initiale du site officiel
-(actisol-agri.fr — travail du sol, préparation de sol).
+Actisol, round 2 : exploration catégorie grande-culture (liens produits,
+format specs).
 """
 
 import logging
@@ -17,11 +17,13 @@ def explore(page, label, url):
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
-        for _ in range(8):
+        for _ in range(10):
             page.mouse.wheel(0, 2000)
             page.wait_for_timeout(300)
         title = page.title()
+        tables = page.query_selector_all("table")
         log.info(f"  Titre : {title} — URL finale : {page.url}")
+        log.info(f"  Tables : {len(tables)}")
         hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         seen = []
         for href in hrefs:
@@ -29,7 +31,7 @@ def explore(page, label, url):
             if h not in seen:
                 seen.append(h)
         log.info(f"  Liens uniques : {len(seen)}")
-        for s in seen[:60]:
+        for s in seen[:70]:
             log.info(f"    {s}")
     except Exception as e:
         log.info(f"  ERREUR : {e!r}")
@@ -48,7 +50,7 @@ def main():
         )
         page = context.new_page()
 
-        explore(page, "Actisol", "https://actisol-agri.fr/")
+        explore(page, "Actisol grande-culture", "https://actisol-agri.fr/categorie-produit/grande-culture/")
 
         page.close()
         browser.close()
