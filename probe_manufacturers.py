@@ -1,46 +1,77 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Güttler, complétude round 2 : récupération du sitemap produits
-WooCommerce complet.
+Güttler, complétude round 3 : pour chacune des 23 URLs produit allemandes
+du sitemap, vérifier s'il existe une version française correspondante
+(lien hreflang / sélecteur de langue), et comparer avec les 12 URLs
+françaises déjà connues via /fr/produits/.
 """
 
 import logging
-import re
 
-import requests
+from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
+DE_URLS = [
+    "https://guttler.org/produkt/avant/",
+    "https://guttler.org/produkt/duplex/",
+    "https://guttler.org/produkt/feldmeister-lk-30-40-45/",
+    "https://guttler.org/produkt/feldmeister/",
+    "https://guttler.org/produkt/greenmaster-250-300/",
+    "https://guttler.org/produkt/greenmaster-600-750-800/",
+    "https://guttler.org/produkt/greenmaster-compact-600/",
+    "https://guttler.org/produkt/greenmaster-ecoline-600/",
+    "https://guttler.org/produkt/greenmaster-zinkensaat/",
+    "https://guttler.org/produkt/greenmaster/",
+    "https://guttler.org/produkt/master-640-770-820/",
+    "https://guttler.org/produkt/master-und-magnum/",
+    "https://guttler.org/produkt/mastercut-600/",
+    "https://guttler.org/produkt/matador/",
+    "https://guttler.org/produkt/mayor-640-770-820/",
+    "https://guttler.org/produkt/mediana/",
+    "https://guttler.org/produkt/offset-480-640/",
+    "https://guttler.org/produkt/primusplus-300/",
+    "https://guttler.org/produkt/super-maxx-1000-1200-7-bio/",
+    "https://guttler.org/produkt/super-maxx-bio/",
+    "https://guttler.org/produkt/super-maxx-culti-sem/",
+    "https://guttler.org/produkt/super-maxx-culti/",
+    "https://guttler.org/produkt/super-maxx-heavy-duty/",
+]
+
 
 def main():
-    url = "https://guttler.org/wp-sitemap-posts-product-1.xml"
-    log.info(f"===== {url} =====")
-    resp = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-    log.info(f"Status : {resp.status_code}")
-    log.info(f"Longueur : {len(resp.text)}")
-    urls = re.findall(r"<loc>(.*?)</loc>", resp.text)
-    log.info(f"Nombre de <loc> : {len(urls)}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
 
-    # regrouper par langue (préfixe de chemin)
-    from collections import Counter
-    langs = Counter()
-    for u in urls:
-        path = u.replace("https://guttler.org", "")
-        parts = [p for p in path.split("/") if p]
-        prefix = parts[0] if parts and len(parts[0]) == 2 else "(racine/DE)"
-        langs[prefix] += 1
-    log.info(f"Répartition par préfixe : {dict(langs)}")
+        for url in DE_URLS:
+            try:
+                page.goto(url, timeout=20000, wait_until="domcontentloaded")
+                page.wait_for_timeout(500)
+            except Exception as e:
+                log.info(f"{url} → ERREUR {e}")
+                continue
 
-    fr_urls = sorted(u for u in urls if "/fr/produit/" in u)
-    log.info(f"\nURLs françaises (/fr/produit/) : {len(fr_urls)}")
-    for u in fr_urls:
-        log.info(f"  {u}")
+            hreflangs = page.eval_on_selector_all(
+                "link[rel='alternate'][hreflang]",
+                "els => els.map(e => ({lang: e.getAttribute('hreflang'), href: e.href}))",
+            )
+            fr = [h for h in hreflangs if h["lang"] == "fr" or h["lang"].startswith("fr-")]
+            if fr:
+                log.info(f"{url}\n  FR → {fr[0]['href']}")
+            else:
+                # chercher un lien de sélecteur de langue dans la page
+                switcher = page.eval_on_selector_all(
+                    "a[href*='/fr/']",
+                    "els => els.map(e => e.href).slice(0,3)",
+                )
+                if switcher:
+                    log.info(f"{url}\n  FR (via lien) → {switcher}")
+                else:
+                    log.info(f"{url}\n  PAS DE VERSION FR TROUVÉE")
 
-    de_urls = sorted(u for u in urls if "/fr/" not in u and "/en/" not in u and "/nl/" not in u)
-    log.info(f"\nURLs allemandes (racine, sans préfixe langue) : {len(de_urls)}")
-    for u in de_urls[:60]:
-        log.info(f"  {u}")
+        browser.close()
 
 
 if __name__ == "__main__":
