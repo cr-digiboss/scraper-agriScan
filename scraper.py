@@ -999,6 +999,20 @@ def _new_holland_product_links(page: Page, base_path: str) -> set:
     return links
 
 
+def _wait_for_new_holland_links(page: Page, base_path: str, max_wait_ms: int = 15000, interval_ms: int = 1500) -> set:
+    """La liste de produits par catégorie se charge de façon asynchrone et
+    parfois lente (déjà vu : 0 lien trouvé après 4s, 22 après 6s sur le même
+    essai). On sonde plutôt qu'on attend un délai fixe, pour rester robuste
+    aux chargements lents sans pénaliser les chargements rapides."""
+    waited = 0
+    links = _new_holland_product_links(page, base_path)
+    while not links and waited < max_wait_ms:
+        page.wait_for_timeout(interval_ms)
+        waited += interval_ms
+        links = _new_holland_product_links(page, base_path)
+    return links
+
+
 def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
     """Scrape les fiches modèles New Holland (tracteurs, presses, moissonneuses,
     ensileuses) non encore présentes dans Neon."""
@@ -1010,12 +1024,12 @@ def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
 
         try:
             page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(2000)
         except Exception as e:
             log.warning(f"  New Holland ({category_slug}) inaccessible : {e}")
             continue
 
-        product_links = _new_holland_product_links(page, base_path)
+        product_links = _wait_for_new_holland_links(page, base_path)
         log.info(f"  New Holland ({category_slug}) → {len(product_links)} fiches modèles trouvées")
         category = normaliser_categorie(category_slug)
 
