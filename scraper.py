@@ -734,6 +734,11 @@ def _machines_from_wide_table(table, brand: str, category: str, range_name: str,
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fendt — fendt.com
+# Piège découvert après mise en prod : le site n'utilise plus un vrai
+# tableau "une cellule = un modèle". Chaque cellule d'en-tête/valeur
+# regroupe tous les modèles dans des <div class="techdata-column"> imbriqués
+# (un par modèle) à l'intérieur d'une seule <th>/<td> — le parseur "large"
+# générique (une cellule HTML = un modèle) ne peut donc pas s'appliquer ici.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FENDT_HOME = "https://www.fendt.com/fr/"
@@ -761,6 +766,36 @@ def _fendt_product_links(page: Page) -> set:
                 continue
             links.add(href.split("?")[0].split("#")[0])
     return links
+
+
+def _parse_fendt_specs_table(table) -> dict:
+    """Table où l'en-tête et chaque ligne regroupent tous les modèles dans
+    des <div class="techdata-column"> imbriqués (un par modèle), dans le
+    même ordre entre l'en-tête et les lignes de valeurs."""
+    header_row = table.query_selector("thead tr") or table.query_selector("tr")
+    if not header_row:
+        return {}
+    model_names = [clean(c.inner_text()) for c in header_row.query_selector_all(".techdata-column")]
+    if not any(model_names):
+        return {}
+    result = {name: {} for name in model_names if name}
+
+    for row in table.query_selector_all("tbody tr"):
+        attr_cell = row.query_selector(".techdata-firstColumn")
+        if not attr_cell:
+            continue
+        attr_name = clean(attr_cell.inner_text())
+        if not attr_name:
+            continue
+        value_cols = row.query_selector_all(".techdata-columns .techdata-column")
+        for idx, val_cell in enumerate(value_cols):
+            if idx >= len(model_names) or not model_names[idx]:
+                continue
+            val = clean(val_cell.inner_text())
+            if val:
+                result[model_names[idx]][attr_name] = val
+
+    return result
 
 
 def scrape_fendt(page: Page, existing_keys: set) -> list[Machine]:
@@ -793,13 +828,25 @@ def scrape_fendt(page: Page, existing_keys: set) -> list[Machine]:
         range_name = clean(page.title()).split("|")[0].strip()
         category = normaliser_categorie(category_slug, range_name)
 
-        for candidats in _machines_from_wide_table(tables[0], "Fendt", category, range_name, url):
-            key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
-            if key in existing_keys:
-                continue
-            machines.append(candidats)
-            existing_keys.add(key)
-            log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+        for table in tables:
+            models = _parse_fendt_specs_table(table)
+            for model_name, specs in models.items():
+                if not specs:
+                    continue
+                key = f"Fendt|{model_name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Fendt"
+                m.range = range_name
+                m.name = model_name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {model_name}")
 
         time.sleep(random.uniform(1.0, 2.0))
 
