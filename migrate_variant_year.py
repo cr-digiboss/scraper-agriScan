@@ -65,7 +65,10 @@ def main():
     a_reindexer = []
     maj, supprimees, conflits = 0, 0, 0
 
-    for (brand, name), items in groupes.items():
+    for i, ((brand, name), items) in enumerate(groupes.items(), 1):
+        if i % 200 == 0:
+            log.info(f"  ... {i}/{len(groupes)} groupes traités")
+
         for d in items:
             old_point_ids.append(_old_point_id(brand, name, d["variant"]))
 
@@ -88,14 +91,24 @@ def main():
                 garde["variant"] = ""
                 a_reindexer.append(garde)
             except psycopg2.errors.UniqueViolation:
+                # Une fiche (brand, name, '') existe déjà : un scraper dédié
+                # couvre ce même modèle avec des données à jour. La fiche
+                # historique TractorData est redondante, on la supprime au
+                # lieu de la laisser bloquée avec une année pour toujours.
                 conn.rollback()
+                with conn.cursor() as cur2:
+                    cur2.execute('DELETE FROM "Machine" WHERE id = %s', (garde["id"],))
+                    conn.commit()
+                supprimees += 1
                 conflits += 1
-                log.warning(f"  Conflit ignoré : {brand} — {name} (une fiche variant='' existe déjà)")
+                log.warning(
+                    f"  Doublon avec un scraper dédié, fiche historique supprimée : {brand} — {name}"
+                )
 
     conn.close()
     log.info(
-        f"\nTerminé : {maj} fiches mises à jour, {supprimees} doublons supprimés, "
-        f"{conflits} conflits ignorés"
+        f"\nTerminé : {maj} fiches mises à jour, {supprimees} doublons supprimés "
+        f"(dont {conflits} en conflit avec un scraper dédié)"
     )
 
     if not qdrant_sync._configured():
