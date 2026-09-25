@@ -2277,28 +2277,38 @@ def scrape_krone(page: Page, existing_keys: set) -> list[Machine]:
 # Güttler — guttler.org (rouleaux, packers, préparation du lit de semis)
 # Piège découvert pendant le sondage : guttler.com appartient à un musicien
 # homonyme (Ludwig Güttler), rien à voir avec le fabricant — le vrai site est
-# guttler.org. La page catalogue française (/fr/produits/) liste directement
-# les fiches produit (pas de pagination, catalogue FR plus restreint que le
-# site allemand). Les fiches ont un vrai tableau WooCommerce/TablePress,
-# mais au format "chaque ligne = un modèle" (comme Valtra), pas le format
-# large classique — d'où un parseur dédié.
+# guttler.org. La page catalogue française (/fr/produits/) ne liste qu'un
+# sous-ensemble restreint du catalogue (12 produits) ; le sitemap WooCommerce
+# (produits en allemand, langue par défaut) donne la liste complète, chaque
+# fiche renvoyant vers sa version FR via un lien hreflang. Les fiches ont un
+# vrai tableau WooCommerce/TablePress, mais au format "chaque ligne = un
+# modèle" (comme Valtra), pas le format large classique — d'où un parseur
+# dédié.
 # ─────────────────────────────────────────────────────────────────────────────
 
-GUTTLER_CATALOGUE_URL = "https://guttler.org/fr/produits/"
+GUTTLER_SITEMAP_URL = "https://guttler.org/wp-sitemap-posts-product-1.xml"
 
 
 def _guttler_product_links(page: Page) -> set:
-    page.goto(GUTTLER_CATALOGUE_URL, timeout=30000, wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)
-    for _ in range(10):
-        page.mouse.wheel(0, 2000)
-        page.wait_for_timeout(250)
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    """La page catalogue FR (/fr/produits/) ne liste qu'un sous-ensemble
+    restreint des produits. Le sitemap WooCommerce liste tout le catalogue
+    (en allemand, langue par défaut du site) ; chaque fiche produit porte un
+    lien hreflang="fr" vers sa version française, utilisée quand elle existe."""
+    resp = requests.get(GUTTLER_SITEMAP_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+    de_urls = re.findall(r"<loc>(.*?)</loc>", resp.text)
+
     links = set()
-    for href in hrefs:
-        if "guttler.org/fr/produit/" not in href:
+    for de_url in de_urls:
+        try:
+            page.goto(de_url, timeout=30000, wait_until="domcontentloaded")
+        except Exception as e:
+            log.warning(f"    Güttler erreur page {de_url} → {e}")
             continue
-        links.add(href.split("?")[0].split("#")[0])
+        fr_hrefs = page.eval_on_selector_all(
+            "link[rel='alternate'][hreflang='fr']", "els => els.map(e => e.href)"
+        )
+        target = fr_hrefs[0] if fr_hrefs else de_url
+        links.add(target.split("?")[0].split("#")[0])
     return links
 
 
