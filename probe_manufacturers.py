@@ -1,7 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
 Validation de scrape_marque() après retrait de l'année du champ variant.
-Utilise Deutz-Fahr (43 modèles, petite marque) pour un run rapide.
+Utilise Claas (109 modèles, historique TractorData, marque confirmée
+fonctionnelle par les runs de production précédents).
 """
 
 import logging
@@ -20,7 +21,7 @@ def main():
         page = browser.new_page()
 
         machines = scraper.scrape_marque(
-            page, "Deutz-Fahr", scraper.MARQUES["Deutz-Fahr"], existing_keys=set()
+            page, "Claas", scraper.MARQUES["Claas"], existing_keys=set()
         )
 
         log.info(f"\nTOTAL : {len(machines)} machines")
@@ -37,7 +38,7 @@ def main():
             log.info(f"  {n} → {c} occurrences")
 
         for m in machines[:5]:
-            log.info(f"  ex: {m.name} | variant={m.variant!r} | annee_specs={m.specs}")
+            log.info(f"  ex: {m.name} | variant={m.variant!r} | specs={m.specs[:150]}")
 
         browser.close()
 
