@@ -835,12 +835,16 @@ def _mf_product_links(page: Page) -> set:
 def _parse_mf_specs_table(table) -> dict:
     """Table où la 1re ligne est l'en-tête (colonne 0 = "MODÈLE") et chaque
     ligne suivante est un modèle (col 0 = nom du modèle, colonnes suivantes
-    = valeurs)."""
+    = valeurs). Certaines fiches ont d'autres tableaux avant/après celui des
+    modèles (options, versions...) : on ne traite que celui dont l'en-tête
+    commence bien par "MODÈLE", sinon on ignore (retour vide) plutôt que de
+    remonter des lignes d'un tableau non pertinent comme si c'était des
+    machines."""
     rows = table.query_selector_all("tr")
     if len(rows) < 2:
         return {}
     header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
-    if not header:
+    if not header or header[0].strip().upper() != "MODÈLE":
         return {}
     result = {}
     for row in rows[1:]:
@@ -898,22 +902,23 @@ def scrape_massey_ferguson(page: Page, existing_keys: set) -> list[Machine]:
         range_name = clean(page.title()).split("|")[0].strip()
         category = normaliser_categorie(category_slug, range_name)
 
-        models = _parse_mf_specs_table(tables[0])
-        for model_name, specs in models.items():
-            key = f"Massey Ferguson|{model_name}|"
-            if key in existing_keys:
-                continue
-            m = Machine()
-            m.brand = "Massey Ferguson"
-            m.range = range_name
-            m.name = model_name
-            m.category = category
-            m.sourceUrl = url
-            m.statut = "active"
-            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
-            machines.append(m)
-            existing_keys.add(key)
-            log.info(f"    [{i}/{len(product_links)}] ✓ {model_name}")
+        for table in tables:
+            models = _parse_mf_specs_table(table)
+            for model_name, specs in models.items():
+                key = f"Massey Ferguson|{model_name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Massey Ferguson"
+                m.range = range_name
+                m.name = model_name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {model_name}")
 
         time.sleep(random.uniform(1.0, 2.0))
 
