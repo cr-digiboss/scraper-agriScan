@@ -808,6 +808,12 @@ def scrape_fendt(page: Page, existing_keys: set) -> list[Machine]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Massey Ferguson — masseyferguson.com
+# Piège découvert après mise en prod : contrairement à Fendt/New Holland, le
+# tableau de specs n'est pas au format "large" (colonne = modèle). C'est
+# l'inverse : la 1re ligne contient les en-têtes d'attributs (dont "MODÈLE"
+# en colonne 0), et chaque ligne suivante est un modèle — même format que
+# Güttler/Actisol/Valtra. Le parseur large produisait des noms de machine
+# qui étaient en fait des libellés de specs ("FORMAT DES BALLES (MM)").
 # ─────────────────────────────────────────────────────────────────────────────
 
 MF_HOME = "https://www.masseyferguson.com/fr_fr.html"
@@ -824,6 +830,46 @@ def _mf_product_links(page: Page) -> set:
         if "/product/" in u.path and u.path.endswith(".html"):
             links.add(href.split("?")[0].split("#")[0])
     return links
+
+
+def _parse_mf_specs_table(table) -> dict:
+    """Table où la 1re ligne est l'en-tête (colonne 0 = "MODÈLE") et chaque
+    ligne suivante est un modèle (col 0 = nom du modèle, colonnes suivantes
+    = valeurs). Certaines fiches ont d'autres tableaux avant/après celui des
+    modèles (options, versions...) : on ne traite que celui dont l'en-tête
+    commence bien par "MODÈLE", sinon on ignore (retour vide) plutôt que de
+    remonter des lignes d'un tableau non pertinent comme si c'était des
+    machines."""
+    rows = table.query_selector_all("tr")
+    if len(rows) < 2:
+        return {}
+    header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+    if not header or header[0].strip().upper() != "MODÈLE":
+        return {}
+    result = {}
+    for row in rows[1:]:
+        cells = row.query_selector_all("td, th")
+        if not cells:
+            continue
+        model_name = clean(cells[0].inner_text())
+        if not model_name:
+            continue
+        specs = {}
+        for i, cell in enumerate(cells[1:], start=1):
+            if i < len(header) and header[i]:
+                val = clean(cell.inner_text())
+                if val:
+                    specs[header[i]] = val
+        if not specs:
+            continue
+        key = model_name
+        if key in result:
+            n = 2
+            while f"{key} ({n})" in result:
+                n += 1
+            key = f"{key} ({n})"
+        result[key] = specs
+    return result
 
 
 def scrape_massey_ferguson(page: Page, existing_keys: set) -> list[Machine]:
@@ -856,13 +902,23 @@ def scrape_massey_ferguson(page: Page, existing_keys: set) -> list[Machine]:
         range_name = clean(page.title()).split("|")[0].strip()
         category = normaliser_categorie(category_slug, range_name)
 
-        for candidats in _machines_from_wide_table(tables[0], "Massey Ferguson", category, range_name, url):
-            key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
-            if key in existing_keys:
-                continue
-            machines.append(candidats)
-            existing_keys.add(key)
-            log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+        for table in tables:
+            models = _parse_mf_specs_table(table)
+            for model_name, specs in models.items():
+                key = f"Massey Ferguson|{model_name}|"
+                if key in existing_keys:
+                    continue
+                m = Machine()
+                m.brand = "Massey Ferguson"
+                m.range = range_name
+                m.name = model_name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {model_name}")
 
         time.sleep(random.uniform(1.0, 2.0))
 
