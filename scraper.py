@@ -419,7 +419,7 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
             continue
 
         page_text = soup_m.get_text()
-        m.variant = extract_year(page_text)
+        annee = extract_year(page_text)
 
         key = f"{m.brand}|{m.name}|{m.variant}"
         if key in existing_keys:
@@ -427,7 +427,7 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
 
         specs = _extraire_specs(page)
         cv = _extraire_puissance(specs, page_text)
-        badge = _badge(m.variant)
+        badge = _badge(annee)
 
         m.anneeDebut, m.anneeFin = parse_production(specs.get("Production", ""))
         if m.anneeFin:
@@ -437,13 +437,13 @@ def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -
 
         specs = traduire_specs(specs)
         specs["puissance_cv"] = cv
-        specs["annee"] = m.variant
+        specs["annee"] = annee
         specs["badge"] = badge
         m.specs = json.dumps(specs, ensure_ascii=False)
 
         machines.append(m)
         existing_keys.add(key)
-        log.info(f"    [{i}/{len(model_links)}] ✓ {m.name} {m.variant}{f' — {badge}' if badge else ''}")
+        log.info(f"    [{i}/{len(model_links)}] ✓ {m.name}{f' — {badge}' if badge else ''}")
 
     return machines
 
