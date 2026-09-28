@@ -1,8 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-McCormick (mccormick-tractors.com) et Franquet (franquet.com) : nouvelles
-marques à ajouter. Exploration de la structure de navigation et des fiches
-produit avant d'écrire un scraper dédié.
+Round 2 : catégories McCormick (produits.html?category=X) pour trouver
+les liens produit, et inspection d'une fiche produit de chaque marque.
 """
 
 import logging
@@ -13,35 +12,40 @@ from urllib.parse import urlparse
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-MCCORMICK_HOME = "https://mccormick-tractors.com/fr/fr.html"
-FRANQUET_HOME = "https://www.franquet.com/"
+MCCORMICK_CATEGORIES = [
+    "https://mccormick-tractors.com/fr/fr/produits.html?category=chargeurs",
+    "https://mccormick-tractors.com/fr/fr/produits.html?category=chenillards",
+    "https://mccormick-tractors.com/fr/fr/produits.html?category=grandes+cultures",
+    "https://mccormick-tractors.com/fr/fr/produits.html?category=sp%C3%A9cialis%C3%A9s",
+    "https://mccormick-tractors.com/fr/fr/produits.html?category=utilitaires",
+]
+
+MCCORMICK_SAMPLE_PRODUCT = "https://mccormick-tractors.com/fr/fr/produits/x8-vt-drive.html"
+FRANQUET_SAMPLE_PRODUCT = "https://www.franquet.com/desherbage-mecanique/bineuses/"
 
 
-def inspect_home(page, url, label, netloc_filter):
-    log.info(f"\n===== {label} : {url} =====")
+def inspect_product(page, url, label):
+    log.info(f"\n===== Fiche produit {label} : {url} =====")
     try:
-        resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        log.info(f"Statut HTTP : {resp.status if resp else 'N/A'}")
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
     except Exception as e:
-        log.warning(f"Erreur navigation : {e}")
+        log.warning(f"Erreur : {e}")
         return
     page.wait_for_timeout(4000)
+    for _ in range(8):
+        page.mouse.wheel(0, 1500)
+        page.wait_for_timeout(300)
+
     log.info(f"Titre : {page.title()}")
-    log.info(f"URL finale : {page.url}")
-
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    log.info(f"Nombre total de liens <a> : {len(hrefs)}")
-
-    liens_pertinents = sorted(set(
-        h for h in hrefs
-        if netloc_filter in urlparse(h).netloc
-    ))
-    log.info(f"Liens vers {netloc_filter} : {len(liens_pertinents)}")
-    for h in liens_pertinents[:60]:
-        log.info(f"  {h}")
-
     tables = page.query_selector_all("table")
-    log.info(f"Nombre de tables sur la page d'accueil : {len(tables)}")
+    log.info(f"Nombre de tables : {len(tables)}")
+    for i, table in enumerate(tables[:3]):
+        rows = table.query_selector_all("tr")
+        log.info(f"  Table {i} : {len(rows)} lignes")
+        for r in rows[:4]:
+            cells = r.query_selector_all("td, th")
+            values = [c.inner_text().strip()[:40] for c in cells]
+            log.info(f"    {values}")
 
 
 def main():
@@ -49,8 +53,28 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page()
 
-        inspect_home(page, MCCORMICK_HOME, "McCormick", "mccormick-tractors.com")
-        inspect_home(page, FRANQUET_HOME, "Franquet", "franquet.com")
+        log.info("===== Catégories McCormick =====")
+        all_products = set()
+        for cat_url in MCCORMICK_CATEGORIES:
+            try:
+                page.goto(cat_url, timeout=30000, wait_until="domcontentloaded")
+            except Exception as e:
+                log.warning(f"Erreur {cat_url} → {e}")
+                continue
+            page.wait_for_timeout(3000)
+            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+            produits = sorted(set(
+                h for h in hrefs
+                if "/fr/fr/produits/" in h and h.endswith(".html")
+            ))
+            log.info(f"{cat_url} → {len(produits)} fiches produit")
+            for h in produits:
+                log.info(f"  {h}")
+            all_products |= set(produits)
+        log.info(f"\nTotal fiches produit uniques McCormick (toutes catégories) : {len(all_products)}")
+
+        inspect_product(page, MCCORMICK_SAMPLE_PRODUCT, "McCormick")
+        inspect_product(page, FRANQUET_SAMPLE_PRODUCT, "Franquet")
 
         browser.close()
 
