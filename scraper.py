@@ -2641,6 +2641,149 @@ def scrape_actisol(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+MCCORMICK_HOME = "https://mccormick-tractors.com/fr/fr.html"
+MCCORMICK_CATALOGUE_URL = "https://mccormick-tractors.com/fr/fr/produits.html"
+
+
+def _mccormick_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "mccormick-tractors.com" not in u.netloc:
+            continue
+        if "/fr/fr/produits/" in u.path and u.path.endswith(".html"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_mccormick(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles McCormick (tracteurs) non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(MCCORMICK_CATALOGUE_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"  McCormick inaccessible : {e}")
+        return machines
+
+    product_links = _mccormick_product_links(page)
+    log.info(f"  McCormick → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        spec_items = page.query_selector_all(".product-hero-specs .spec-item")
+        if not spec_items:
+            continue
+
+        specs = {}
+        for item in spec_items:
+            lines = [clean(t) for t in item.inner_text().split("\n") if clean(t)]
+            if len(lines) >= 2:
+                specs[lines[0]] = lines[1]
+
+        name = clean(page.title()).split("|")[0].strip()
+        if not name or len(name) < 2:
+            continue
+
+        key = f"McCormick|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "McCormick"
+        m.range = name
+        m.name = name
+        m.category = "Tracteurs"
+        m.sourceUrl = url
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+FRANQUET_HOME = "https://www.franquet.com/"
+FRANQUET_CATEGORIES = [
+    "https://www.franquet.com/travail-du-sol/",
+    "https://www.franquet.com/desherbage-mecanique/",
+    "https://www.franquet.com/equipements-pour-semis/",
+    "https://www.franquet.com/materiels-recolte-betteraviere/",
+]
+
+
+def _franquet_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "franquet.com" not in u.netloc:
+            continue
+        if u.path.startswith(base_path) and u.path.rstrip("/") != base_path.rstrip("/"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_franquet(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Franquet non encore présentes dans Neon."""
+    machines = []
+
+    for category_url in FRANQUET_CATEGORIES:
+        base_path = urlparse(category_url).path
+        category_slug = base_path.rstrip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Franquet ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _franquet_product_links(page, base_path)
+        log.info(f"  Franquet ({category_slug}) → {len(product_links)} fiches trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                for _ in range(6):
+                    page.mouse.wheel(0, 1500)
+                    page.wait_for_timeout(250)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            range_name = clean(page.title()).split("-")[0].strip()
+
+            for table in tables:
+                for candidats in _machines_from_wide_table(table, "Franquet", category, range_name, url):
+                    key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                    if key in existing_keys:
+                        continue
+                    machines.append(candidats)
+                    existing_keys.add(key)
+                    log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2713,6 +2856,8 @@ def run() -> int:
             ("Krone (krone.fr)", scrape_krone),
             ("Güttler (guttler.org)", scrape_guttler),
             ("Actisol (actisol-agri.fr)", scrape_actisol),
+            ("McCormick (mccormick-tractors.com)", scrape_mccormick),
+            ("Franquet (franquet.com)", scrape_franquet),
         ]:
             log.info(f"Source : {nom_source}")
             try:
