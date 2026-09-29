@@ -1,14 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 3 round 2 :
-- Hardi : fiche produit (mounted/master)
-- Tecnoma : fiche produit (premis)
-- Agrifac : fiche produit (vanguard-55)
-- Lely : dump complet des liens (round 1 n'a rien trouvé avec le filtre mots-clés)
+Lot 3 round 3 :
+- Hardi/Tecnoma/Agrifac : chercher un onglet/lien "Caractéristiques" ou
+  "Spécifications techniques" plus bas sur la page (comme Berthoud)
+- Lely : fiche produit Astronaut (robot de traite) pour voir s'il y a des
+  specs structurées
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -19,6 +18,11 @@ UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+CANDIDATE_TEXTS = [
+    "Caractéristiques techniques", "Caractéristiques", "Spécifications techniques",
+    "Spécifications", "Données techniques", "Fiche technique", "Technical specifications",
+]
 
 
 def accept_cookies(page):
@@ -41,34 +45,34 @@ def inspect(page, url, label):
         accept_cookies(page)
         page.wait_for_timeout(1500)
         log.info(f"\n--- {label} : {url} title={page.title()!r}")
-        tables = page.query_selector_all("table")
-        log.info(f"    {len(tables)} table(s)")
-        for i, t in enumerate(tables[:2]):
-            rows = t.query_selector_all("tr")
-            for r in rows[:6]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
-        spec_divs = page.query_selector_all("[class*='spec' i], [class*='caract' i], [class*='fact' i]")
-        log.info(f"    {len(spec_divs)} div(s) spec/caract/fact")
-        text = page.inner_text("body")
-        log.info(f"    body text (900 car.) : {text[:900]!r}")
-    except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
 
+        body_text_full = page.inner_text("body")
+        log.info(f"    longueur texte page : {len(body_text_full)} caractères")
 
-def dump_links(page, url, label):
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2500)
-        accept_cookies(page)
-        page.wait_for_timeout(1000)
-        log.info(f"\n=== {label} : {url} title={page.title()!r}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        netloc = urlparse(page.url).netloc
-        same = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if netloc in urlparse(h).netloc))
-        log.info(f"  {len(same)} liens")
-        for h in same[:80]:
-            log.info(f"    {h}")
+        for text in CANDIDATE_TEXTS:
+            idx = body_text_full.find(text)
+            if idx >= 0:
+                log.info(f"    trouvé '{text}' à l'offset {idx}")
+
+        for text in CANDIDATE_TEXTS:
+            try:
+                loc = page.get_by_text(text, exact=False).first
+                if loc.count() == 0:
+                    continue
+                loc.scroll_into_view_if_needed(timeout=3000)
+                loc.click(timeout=3000)
+                page.wait_for_timeout(2000)
+                tables = page.query_selector_all("table")
+                log.info(f"    après clic sur '{text}' : {len(tables)} table(s)")
+                for t in tables[:2]:
+                    rows = t.query_selector_all("tr")
+                    for r in rows[:6]:
+                        cells = r.query_selector_all("td, th")
+                        log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
+                if tables:
+                    break
+            except Exception:
+                continue
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
 
@@ -90,7 +94,7 @@ def main():
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.lely.com/fr/", "Lely home (dump complet)")
+        inspect(page, "https://www.lely.com/fr/solutions/traite/astronaut/", "Lely Astronaut")
         page.close()
 
         browser.close()
