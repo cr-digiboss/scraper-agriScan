@@ -1,7 +1,6 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Test rapide du nouveau parseur texte de _horsch_facts() sur plusieurs
-fiches avant de relancer le crawl complet (coûteux).
+Validation finale de scrape_horsch() (parseur texte) avant merge.
 """
 
 import logging
@@ -13,26 +12,21 @@ import scraper
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(user_agent=UA)
+        page = browser.new_page(user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ))
 
-        for url in [
-            "https://www.horsch.com/fr/produits/travail-du-sol/dechaumeur-a-disques/joker-4-6-hd",
-            "https://www.horsch.com/fr/produits/semis/semoir-a-disques/pronto-as",
-            "https://www.horsch.com/fr/produits/technique-de-semis-monograine/maestro/maestro-ax",
-            "https://www.horsch.com/fr/produits/travail-du-sol",  # catégorie, doit donner {}
-        ]:
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            specs = scraper._horsch_facts(page)
-            log.info(f"{url}\n  -> {len(specs)} specs : {specs}\n")
+        log.info("=== Horsch ===")
+        horsch = scraper.scrape_horsch(page, existing_keys=set())
+        log.info(f"TOTAL Horsch : {len(horsch)} machines")
+        for m in horsch[:20]:
+            log.info(f"  name={m.name!r} category={m.category!r} url={m.sourceUrl}")
+            log.info(f"    specs={m.specs}")
 
         browser.close()
 
