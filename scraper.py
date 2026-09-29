@@ -2882,24 +2882,21 @@ HORSCH_MAX_PAGES = 200
 
 def _horsch_facts(page) -> dict:
     """Les fiches produit HORSCH n'ont pas de <table> : les caractéristiques
-    sont des divs (label en <small>, valeur en <strong>, unité en <small>)
-    regroupées dans un conteneur dont la classe contient 'fact' (ex.
-    'keyfacts')."""
+    sont regroupées dans un conteneur dont la classe contient 'fact' (ex.
+    'keyfacts'), sous forme de blocs texte "label\\nvaleur" séparés par une
+    ligne vide. La structure DOM interne (classes des divs) varie et n'est
+    pas fiable ; le texte brut du conteneur, lui, est stable."""
     specs = {}
     try:
         container = page.wait_for_selector("[class*='fact']", timeout=6000, state="attached")
     except Exception:
         return specs
-    for div in container.query_selector_all("div"):
-        smalls = div.query_selector_all("small")
-        strong = div.query_selector("strong")
-        if not smalls or not strong:
-            continue
-        label = clean(smalls[0].inner_text())
-        value = clean(strong.inner_text())
-        unit = clean(smalls[1].inner_text()) if len(smalls) > 1 else ""
-        if label and value:
-            specs[label] = f"{value} {unit}".strip()
+    text = container.inner_text()
+    for block in text.split("\n\n"):
+        lines = [clean(l) for l in block.split("\n") if clean(l)]
+        if len(lines) >= 2:
+            label, value = lines[0], " ".join(lines[1:])
+            specs[label] = value
     return specs
 
 
