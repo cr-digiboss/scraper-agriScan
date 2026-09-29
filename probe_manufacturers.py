@@ -1,7 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 2 : Rauch, Bogballe, Sulky, Berthoud. Round 1 : trouver la bonne URL FR
-pour chacune et lister les liens de navigation pour repérer la page catalogue.
+Lot 2 round 2 : URLs corrigées.
+- Rauch : /fr/ 404 mais domaine répond -> dumper tous les liens de la page racine
+- Sulky : sulky-burel.com/products/fertilisation/ trouvé via recherche web
+- Berthoud : tester berthoud.fr/fr/ directement (évite la course de redirections)
+- Bogballe : explorer la page /modeles/ (fonctionne déjà)
 """
 
 import logging
@@ -17,52 +20,22 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-CANDIDATES = {
-    "Rauch": [
-        "https://rauch.de/fr/",
-        "https://rauch.de/fr/index.html",
-    ],
-    "Bogballe": [
-        "https://www.bogballe.com/fr/epandeurs-dengrais/",
-        "https://www.bogballe.com/fr/",
-    ],
-    "Sulky": [
-        "https://www.sulky-burel.com/fr/",
-        "https://www.sulky-burel.com/",
-    ],
-    "Berthoud": [
-        "https://www.berthoud.fr/",
-        "https://www.berthoud.com/",
-    ],
-}
 
-
-def inspect(page, marque, urls):
-    for url in urls:
-        try:
-            resp = page.goto(url, timeout=20000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2500)
-            status = resp.status if resp else None
-            final_url = page.url
-            title = page.title()
-            log.info(f"\n=== {marque} : {url} -> status={status} final={final_url} title={title!r}")
-
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            netloc = urlparse(final_url).netloc
-            same_domain = sorted(set(
-                h.split("?")[0].split("#")[0] for h in hrefs
-                if netloc in urlparse(h).netloc
-            ))
-            mots = ["produit", "product", "gamme", "catalog", "machine", "epandeur", "pulveris", "semoir", "range"]
-            pertinents = [h for h in same_domain if any(m in h.lower() for m in mots)]
-            log.info(f"  {len(same_domain)} liens même domaine, {len(pertinents)} liens 'catalogue' :")
-            for h in pertinents[:40]:
-                log.info(f"    {h}")
-            if status and status < 400:
-                return
-        except Exception as e:
-            log.warning(f"  {marque} : {url} -> échec ({e})")
-    log.error(f"  {marque} : AUCUNE URL candidate n'a fonctionné")
+def dump(page, url, label, keyword_filter=None):
+    try:
+        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
+        log.info(f"\n=== {label} : {url} -> final={page.url} title={page.title()!r}")
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        netloc = urlparse(page.url).netloc
+        same = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if netloc in urlparse(h).netloc))
+        if keyword_filter:
+            same = [h for h in same if keyword_filter(h)]
+        log.info(f"  {len(same)} liens")
+        for h in same[:60]:
+            log.info(f"    {h}")
+    except Exception as e:
+        log.warning(f"  {label} : échec ({e})")
 
 
 def main():
@@ -70,8 +43,13 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        for marque, urls in CANDIDATES.items():
-            inspect(page, marque, urls)
+        dump(page, "https://rauch.de/", "Rauch racine")
+        dump(page, "https://www.sulky-burel.com/products/fertilisation/", "Sulky fertilisation")
+        dump(page, "https://www.berthoud.fr/fr/", "Berthoud FR")
+        dump(
+            page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/", "Bogballe modeles",
+            keyword_filter=lambda h: "/modeles/" in h,
+        )
 
         browser.close()
 
