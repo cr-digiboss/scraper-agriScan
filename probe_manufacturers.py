@@ -1,8 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 1 de marques manquantes signalées par l'utilisateur : Horsch, Amazone,
-Maschio Gaspardo, Vicon. Round 1 : trouver la bonne URL d'accueil FR pour
-chacune et lister les liens de navigation pour repérer la page catalogue.
+Lot 1 round 2 : URLs corrigées trouvées via recherche web.
+- Horsch : horsch.com/fr-fr a 404, tester horsch.com/fr et la home racine
+- Amazone : amazone.fr fonctionne, chercher le lien catalogue produits
+- Maschio Gaspardo : bon domaine = maschiogaspardo.com/fr_fr/ (underscore)
+- Vicon : bon domaine = fr.vicon.eu (sous-domaine fr.)
 """
 
 import logging
@@ -15,23 +17,18 @@ log = logging.getLogger("probe")
 
 CANDIDATES = {
     "Horsch": [
-        "https://www.horsch.com/fr-fr/",
         "https://www.horsch.com/fr/",
-        "https://www.horsch.com/",
+        "https://www.horsch.com/produkte",
+        "https://www.horsch.com/home",
     ],
     "Amazone": [
         "https://www.amazone.fr/",
-        "https://www.amazone.de/fr/",
     ],
     "Maschio Gaspardo": [
-        "https://www.maschionet.com/fr-fr/",
-        "https://www.maschio.com/fr/",
-        "https://www.maschionet.com/",
+        "https://www.maschiogaspardo.com/fr_fr/",
     ],
     "Vicon": [
-        "https://www.vicon-agriculture.com/fr-fr/",
-        "https://www.vicon-agriculture.com/fr/",
-        "https://www.vicon-agriculture.com/",
+        "https://fr.vicon.eu/",
     ],
 }
 
@@ -40,7 +37,7 @@ def inspect(page, marque, urls):
     for url in urls:
         try:
             resp = page.goto(url, timeout=20000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(2500)
             status = resp.status if resp else None
             final_url = page.url
             title = page.title()
@@ -52,10 +49,14 @@ def inspect(page, marque, urls):
                 h.split("?")[0].split("#")[0] for h in hrefs
                 if netloc in urlparse(h).netloc
             ))
-            log.info(f"  {len(same_domain)} liens même domaine, échantillon :")
-            for h in same_domain[:40]:
+            # Filtre : liens contenant des mots-clés catalogue
+            mots = ["produit", "product", "gamme", "catalog", "machine", "matériel", "materiel", "range"]
+            pertinents = [h for h in same_domain if any(m in h.lower() for m in mots)]
+            log.info(f"  {len(same_domain)} liens même domaine, {len(pertinents)} liens 'catalogue' :")
+            for h in pertinents[:50]:
                 log.info(f"    {h}")
-            return  # une URL qui marche suffit
+            if status and status < 400:
+                return
         except Exception as e:
             log.warning(f"  {marque} : {url} -> échec ({e})")
     log.error(f"  {marque} : AUCUNE URL candidate n'a fonctionné")
