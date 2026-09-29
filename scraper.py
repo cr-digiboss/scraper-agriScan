@@ -2966,87 +2966,6 @@ def scrape_horsch(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
-BOGBALLE_MODELES_URL = "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/"
-
-
-def _bogballe_model_links(page: Page) -> set:
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = set()
-    for href in hrefs:
-        u = urlparse(href)
-        if "bogballe.com" not in u.netloc:
-            continue
-        if "/epandeurs-dengrais/modeles/" in u.path and u.path.rstrip("/") != "/fr/epandeurs-dengrais/modeles":
-            links.add(href.split("?")[0].split("#")[0])
-    return links
-
-
-def _bogballe_specs(page) -> dict:
-    """Les fiches modèle Bogballe n'ont pas de <table> : les caractéristiques
-    sont du texte en blocs "label\\n\\nvaleur" dans le conteneur
-    '.modeller-detail-outer' (onglet Caractéristiques, actif par défaut)."""
-    specs = {}
-    container = page.query_selector(".modeller-detail-outer")
-    if not container:
-        return specs
-    text = container.inner_text()
-    for block in text.split("\n\n"):
-        lines = [clean(l) for l in block.split("\n") if clean(l)]
-        if len(lines) >= 2:
-            label, value = lines[0], " ".join(lines[1:])
-            specs[label] = value
-    return specs
-
-
-def scrape_bogballe(page: Page, existing_keys: set) -> list[Machine]:
-    """Scrape les fiches modèles Bogballe (épandeurs d'engrais) non encore
-    présentes dans Neon."""
-    machines = []
-    try:
-        page.goto(BOGBALLE_MODELES_URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-    except Exception as e:
-        log.warning(f"  Bogballe inaccessible : {e}")
-        return machines
-
-    product_links = _bogballe_model_links(page)
-    log.info(f"  Bogballe → {len(product_links)} fiches modèles trouvées sur le site")
-
-    for i, url in enumerate(sorted(product_links), 1):
-        try:
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2500)
-        except Exception as e:
-            log.warning(f"    Erreur {url} → {e}")
-            continue
-
-        specs = _bogballe_specs(page)
-        if not specs:
-            continue
-
-        name = clean(page.title())
-        if not name or len(name) < 2:
-            continue
-
-        key = f"Bogballe|{name}|"
-        if key in existing_keys:
-            continue
-
-        m = Machine()
-        m.brand = "Bogballe"
-        m.name = name
-        m.category = "Épandeurs d'engrais"
-        m.sourceUrl = url
-        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
-        m.statut = "active"
-        machines.append(m)
-        existing_keys.add(key)
-        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
-        time.sleep(random.uniform(1.0, 2.0))
-
-    return machines
-
-
 SULKY_HOME = "https://sky-agriculture.com/produits/"
 SULKY_MAX_PAGES = 150
 
@@ -3280,7 +3199,6 @@ def run() -> int:
             ("Franquet (franquet.com)", scrape_franquet),
             ("Vicon (fr.vicon.eu)", scrape_vicon),
             ("Horsch (horsch.com)", scrape_horsch),
-            ("Bogballe (bogballe.com)", scrape_bogballe),
             ("Sulky (sky-agriculture.com)", scrape_sulky),
             ("Berthoud (berthoud.com)", scrape_berthoud),
         ]:
