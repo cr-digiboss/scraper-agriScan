@@ -2966,6 +2966,163 @@ def scrape_horsch(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+SULKY_HOME = "https://sky-agriculture.com/produits/"
+SULKY_MAX_PAGES = 150
+
+
+def scrape_sulky(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Sulky (marque du groupe Burel, catalogue
+    désormais publié sous sky-agriculture.com) non encore présentes dans
+    Neon. Catalogue à plusieurs niveaux (catégorie > sous-catégorie éventuelle
+    > fiche modèle), parcouru en DFS ; une fiche modèle est reconnue par la
+    présence d'un tableau de specs au format "large" (une colonne par
+    variante), déjà géré par _machines_from_wide_table."""
+    machines = []
+    to_visit = [SULKY_HOME]
+    visited = set()
+    found = 0
+
+    while to_visit and len(visited) < SULKY_MAX_PAGES:
+        url = to_visit.pop()
+        if url in visited:
+            continue
+        visited.add(url)
+
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if tables:
+            range_name = clean(page.title()).split("|")[0].strip()
+            segments = [s for s in urlparse(url).path.split("/") if s]
+            category_slug = segments[1] if len(segments) > 1 else ""
+            category = normaliser_categorie(category_slug, range_name)
+            for table in tables:
+                for candidats in _machines_from_wide_table(table, "Sulky", category, range_name, url):
+                    key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                    if key in existing_keys:
+                        continue
+                    machines.append(candidats)
+                    existing_keys.add(key)
+                    found += 1
+                    log.info(f"    [{found}] ✓ {candidats.name}")
+            time.sleep(random.uniform(1.0, 2.0))
+            continue
+
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        for href in hrefs:
+            u = urlparse(href)
+            if "sky-agriculture.com" not in u.netloc:
+                continue
+            if "/produits/" not in u.path:
+                continue
+            clean_href = href.split("?")[0].split("#")[0]
+            segments = [s for s in urlparse(clean_href).path.split("/") if s]
+            if len(segments) <= 3 and clean_href not in visited:
+                to_visit.append(clean_href)
+
+    log.info(f"  Sulky (sky-agriculture.com) → {found} machines trouvées")
+    return machines
+
+
+BERTHOUD_GAMME_URL = "https://www.berthoud.com/gamme-grandes-cultures/"
+
+# Pages de navigation trouvées dans le même menu que les fiches produit,
+# à exclure car ce ne sont pas des machines.
+BERTHOUD_EXCLUSIONS = [
+    "notre-histoire", "services-et-assistance", "services-dedies",
+    "solution-de-financement", "gamme-vignes", "gamme-grandes-cultures",
+    "innovations-et-technologies", "contact", "la-solution-air-drive",
+    "katch-panneaux-recuperateurs",
+]
+
+
+def _berthoud_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "berthoud.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 1 and segments[0] not in BERTHOUD_EXCLUSIONS:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_berthoud(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Berthoud (pulvérisation agricole
+    professionnelle, berthoud.com) non encore présentes dans Neon. Les
+    caractéristiques techniques sont sous un onglet à cliquer pour faire
+    apparaître le tableau de specs ; les pages qui n'ont pas cet onglet (ou
+    pas de tableau après clic) ne sont pas des fiches machine et sont
+    ignorées."""
+    machines = []
+    try:
+        page.goto(BERTHOUD_GAMME_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"  Berthoud inaccessible : {e}")
+        return machines
+
+    product_links = _berthoud_product_links(page)
+    log.info(f"  Berthoud → {len(product_links)} fiches candidates trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        try:
+            tab = page.get_by_text("Caractéristiques techniques", exact=False).first
+            tab.click(timeout=3000)
+            page.wait_for_timeout(2000)
+        except Exception:
+            continue
+
+        specs = {}
+        for table in page.query_selector_all("table"):
+            for row in table.query_selector_all("tr"):
+                cells = row.query_selector_all("td, th")
+                if len(cells) >= 2:
+                    k = clean(cells[0].inner_text())
+                    v = clean(cells[1].inner_text())
+                    if k and v:
+                        specs[k] = v
+
+        if not specs:
+            continue
+
+        name = clean(page.title()).split("-")[0].strip()
+        if not name or len(name) < 2:
+            continue
+
+        key = f"Berthoud|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Berthoud"
+        m.name = name
+        m.category = normaliser_categorie(name)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -3042,6 +3199,8 @@ def run() -> int:
             ("Franquet (franquet.com)", scrape_franquet),
             ("Vicon (fr.vicon.eu)", scrape_vicon),
             ("Horsch (horsch.com)", scrape_horsch),
+            ("Sulky (sky-agriculture.com)", scrape_sulky),
+            ("Berthoud (berthoud.com)", scrape_berthoud),
         ]:
             log.info(f"Source : {nom_source}")
             try:
