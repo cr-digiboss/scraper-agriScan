@@ -2887,7 +2887,7 @@ def _horsch_facts(page) -> dict:
     'keyfacts')."""
     specs = {}
     try:
-        container = page.wait_for_selector("[class*='fact']", timeout=6000)
+        container = page.wait_for_selector("[class*='fact']", timeout=6000, state="attached")
     except Exception:
         return specs
     for div in container.query_selector_all("div"):
