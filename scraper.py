@@ -2784,6 +2784,188 @@ def scrape_franquet(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+VICON_HOME = "https://fr.vicon.eu/"
+
+
+def _clean_vicon_title(raw_title: str) -> str:
+    """'Vicon ANDEX 644 - Vicon' -> 'ANDEX 644'"""
+    t = clean(raw_title)
+    t = re.sub(r"^Vicon\s+", "", t, flags=re.I)
+    t = re.sub(r"\s*-\s*Vicon\s*$", "", t, flags=re.I)
+    return clean(t)
+
+
+def _vicon_product_links(page: Page) -> set:
+    """Une fiche modèle Vicon a toujours une URL à 3 segments :
+    /categorie/sous-categorie/modele (même structure que Kverneland, même
+    groupe/plateforme)."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "vicon.eu" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 3:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def scrape_vicon(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Vicon (marque du groupe Kverneland) non
+    encore présentes dans Neon. Même structure de site que Kverneland."""
+    machines = []
+    try:
+        page.goto(VICON_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+    except Exception as e:
+        log.warning(f"  Vicon inaccessible : {e}")
+        return machines
+
+    product_links = _vicon_product_links(page)
+    log.info(f"  Vicon → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        specs = {}
+        for table in page.query_selector_all("table"):
+            for row in table.query_selector_all("tr"):
+                cells = row.query_selector_all("td, th")
+                if len(cells) >= 2:
+                    k = clean(cells[0].inner_text())
+                    v = clean(cells[1].inner_text())
+                    if k and v:
+                        specs[k] = v
+
+        if not specs:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug, subcategory_slug = segments[0], segments[1]
+
+        m = Machine()
+        m.brand = "Vicon"
+        # La 1ère ligne du tableau donne le nom exact du modèle ; le <title>
+        # de la page combine parfois plusieurs modèles proches (ex. "705 EVO
+        # - 705 VARIO") et est donc moins fiable.
+        m.name = specs.pop("Caractéristiques", "") or _clean_vicon_title(page.title())
+        m.category = normaliser_categorie(category_slug, subcategory_slug, m.name)
+        m.subcategory = _humanize_slug(subcategory_slug)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+
+        if not m.name or len(m.name) < 2:
+            continue
+
+        key = f"{m.brand}|{m.name}|{m.variant}"
+        if key in existing_keys:
+            continue
+
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+HORSCH_HOME = "https://www.horsch.com/fr/produits"
+HORSCH_MAX_PAGES = 200
+
+
+def _horsch_facts(page) -> dict:
+    """Les fiches produit HORSCH n'ont pas de <table> : les caractéristiques
+    sont regroupées dans un conteneur dont la classe contient 'fact' (ex.
+    'keyfacts'), sous forme de blocs texte "label\\nvaleur" séparés par une
+    ligne vide. La structure DOM interne (classes des divs) varie et n'est
+    pas fiable ; le texte brut du conteneur, lui, est stable."""
+    specs = {}
+    try:
+        container = page.wait_for_selector("[class*='fact']", timeout=6000, state="attached")
+    except Exception:
+        return specs
+    text = container.inner_text()
+    for block in text.split("\n\n"):
+        lines = [clean(l) for l in block.split("\n") if clean(l)]
+        if len(lines) >= 2:
+            label, value = lines[0], " ".join(lines[1:])
+            specs[label] = value
+    return specs
+
+
+def scrape_horsch(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles HORSCH (horsch.com/fr) non encore présentes
+    dans Neon. Catalogue à 3 niveaux (catégorie > sous-catégorie > modèle) ;
+    on descend par BFS et on reconnaît une fiche modèle à la présence du
+    conteneur de caractéristiques techniques."""
+    machines = []
+    to_visit = [HORSCH_HOME]
+    visited = set()
+    found = 0
+
+    while to_visit and len(visited) < HORSCH_MAX_PAGES:
+        url = to_visit.pop()
+        if url in visited:
+            continue
+        visited.add(url)
+
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        specs = _horsch_facts(page)
+        if specs:
+            segments = [s for s in urlparse(url).path.split("/") if s]
+            # /fr/produits/<categorie>/<sous-categorie>/<modele>
+            category_slug = segments[2] if len(segments) > 2 else ""
+            name = clean(page.title()).split("|")[0].strip()
+            if not name or len(name) < 2:
+                continue
+
+            key = f"Horsch|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Horsch"
+            m.name = name
+            m.category = normaliser_categorie(category_slug, name)
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            found += 1
+            log.info(f"    [{found}] ✓ {name}")
+            time.sleep(random.uniform(1.0, 2.0))
+            continue  # une fiche modèle n'a pas de sous-pages produits utiles
+
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        for href in hrefs:
+            u = urlparse(href)
+            if "horsch.com" not in u.netloc:
+                continue
+            if "/fr/produits/" not in u.path:
+                continue
+            clean_href = href.split("?")[0].split("#")[0]
+            segments = [s for s in urlparse(clean_href).path.split("/") if s]
+            # /fr/produits (2) / catégorie (3) / sous-catégorie (4) / modèle (5)
+            if len(segments) <= 5 and clean_href not in visited:
+                to_visit.append(clean_href)
+
+    log.info(f"  Horsch → {found} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -2858,6 +3040,8 @@ def run() -> int:
             ("Actisol (actisol-agri.fr)", scrape_actisol),
             ("McCormick (mccormick-tractors.com)", scrape_mccormick),
             ("Franquet (franquet.com)", scrape_franquet),
+            ("Vicon (fr.vicon.eu)", scrape_vicon),
+            ("Horsch (horsch.com)", scrape_horsch),
         ]:
             log.info(f"Source : {nom_source}")
             try:
