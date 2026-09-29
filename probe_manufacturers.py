@@ -1,10 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 1 round 4 : finaliser la structure des fiches produit.
-- Amazone : gérer le bandeau cookies puis inspecter une fiche produit
-- Vicon : inspecter une fiche produit (andaineur Andex 644)
-- Maschio Gaspardo : lister /fr_fr/all-products puis inspecter une fiche (bora.html)
-- Horsch : descendre d'un niveau sous travail-du-sol/dechaumeur-a-disques
+Lot 1 round 5 :
+- Horsch : structure d'une fiche produit (joker-4-6-hd)
+- Amazone : trouver un produit sous épandeurs (catégorie différente de la
+  fiche "campagne" Precea qui n'avait pas de tableau specs) et inspecter
 """
 
 import logging
@@ -46,37 +45,11 @@ def dump_specs(page, url, label):
         for i, t in enumerate(tables[:3]):
             rows = t.query_selector_all("tr")
             log.info(f"    table {i}: {len(rows)} lignes")
-            for r in rows[:5]:
+            for r in rows[:6]:
                 cells = r.query_selector_all("td, th")
                 log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
-        # divs de type spec-item / caractéristique
-        spec_divs = page.query_selector_all("[class*='spec' i], [class*='caract' i], [class*='techdata' i], [class*='feature' i]")
-        log.info(f"    {len(spec_divs)} div(s) 'spec/caract/techdata/feature'")
-        for d in spec_divs[:15]:
-            t = d.inner_text().strip().replace("\n", " | ")[:150]
-            if t:
-                log.info(f"      spec-div: {t}")
         text = page.inner_text("body")
-        log.info(f"    body text (1200 car., apres cookies) : {text[:1200]!r}")
-    except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
-
-
-def dump_links(page, url, label, keyword_filter=None):
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-        accept_cookies(page)
-        page.wait_for_timeout(1000)
-        log.info(f"\n=== {label} : {url} title={page.title()!r}")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        netloc = urlparse(url).netloc
-        same = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if netloc in urlparse(h).netloc))
-        if keyword_filter:
-            same = [h for h in same if keyword_filter(h)]
-        log.info(f"  {len(same)} liens")
-        for h in same[:60]:
-            log.info(f"    {h}")
+        log.info(f"    body text (1000 car.) : {text[:1000]!r}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
 
@@ -88,38 +61,32 @@ def main():
         page = browser.new_page(user_agent=UA)
         dump_specs(
             page,
-            "https://amazone.fr/fr-fr/produits-et-solutions-digitales/machines-agricoles/semis/semoirs-monograines/amazone-semoir-monograine-precea-6000-2cc-475842",
-            "Amazone Precea 6000-2CC",
+            "https://www.horsch.com/fr/produits/travail-du-sol/dechaumeur-a-disques/joker-4-6-hd",
+            "Horsch Joker 4-6 HD",
         )
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_specs(
-            page,
-            "https://fr.vicon.eu/andaineurs/andaineurs-double-rotor/vicon-andex-644",
-            "Vicon Andex 644",
-        )
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        dump_links(
-            page,
-            "https://www.maschiogaspardo.com/fr_fr/all-products",
-            "Maschio Gaspardo all-products",
-            keyword_filter=lambda h: h.endswith(".html"),
-        )
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        dump_specs(page, "https://www.maschiogaspardo.com/fr_fr/bora.html", "Maschio Gaspardo Bora")
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        dump_links(
-            page,
-            "https://www.horsch.com/fr/produits/travail-du-sol/dechaumeur-a-disques",
-            "Horsch dechaumeur-a-disques",
-        )
+        try:
+            page.goto(
+                "https://amazone.fr/fr-fr/produits-et-solutions-digitales/machines-agricoles/fertilisation/epandeurs-portes",
+                timeout=25000, wait_until="domcontentloaded",
+            )
+            page.wait_for_timeout(2000)
+            accept_cookies(page)
+            page.wait_for_timeout(1000)
+            log.info(f"\n=== Amazone épandeurs-portés : title={page.title()!r}")
+            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+            netloc = urlparse(page.url).netloc
+            same = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if netloc in urlparse(h).netloc))
+            pertinents = [h for h in same if "epandeur" in h.lower() or "za-" in h.lower()]
+            log.info(f"  {len(pertinents)} liens pertinents:")
+            for h in pertinents[:30]:
+                log.info(f"    {h}")
+            if pertinents:
+                dump_specs(page, pertinents[0], "Amazone premier épandeur")
+        except Exception as e:
+            log.warning(f"Amazone épandeurs : échec ({e})")
         page.close()
 
         browser.close()
