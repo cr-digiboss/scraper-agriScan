@@ -1,9 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 2 round 5 :
-- Bogballe : trouver le vrai conteneur de specs (texte en blocs comme Horsch)
-- Sky Agriculture (ex-Sulky) : fiche produit DX20 (sous fertilisation/)
-- Berthoud.com : fiche produit Vega (gamme grandes cultures, URLs plates)
+Lot 2 round 6 :
+- Bogballe : remonter la chaîne d'ancêtres pour trouver un conteneur stable
+  englobant toute la section "Caractéristiques" (pas juste un item)
+- Berthoud : cliquer sur "Caractéristiques techniques" pour voir si des
+  données structurées apparaissent (comme sur Amazone, qui n'avait que des
+  PDF)
 """
 
 import logging
@@ -19,63 +21,51 @@ UA = (
 )
 
 
-def accept_cookies(page):
-    for text in ["Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter", "Allow all cookies"]:
-        try:
-            btn = page.get_by_text(text, exact=False).first
-            if btn.is_visible(timeout=1500):
-                btn.click(timeout=1500)
-                page.wait_for_timeout(1000)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def inspect(page, url, label):
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-        accept_cookies(page)
-        page.wait_for_timeout(1500)
-        log.info(f"\n--- {label} : {url} title={page.title()!r}")
-        tables = page.query_selector_all("table")
-        log.info(f"    {len(tables)} table(s)")
-        for i, t in enumerate(tables[:2]):
-            rows = t.query_selector_all("tr")
-            for r in rows[:6]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
-        # chercher le conteneur autour d'un texte connu
-        try:
-            loc = page.get_by_text("Largeur de travail", exact=False).first
-            if loc.count() if hasattr(loc, "count") else True:
-                cls = loc.evaluate("el => el.closest('[class]') ? el.closest('[class]').className : null")
-                log.info(f"    classe du plus proche ancêtre de 'Largeur de travail' : {cls!r}")
-                parent_text = loc.evaluate("el => { let p = el; for (let i=0;i<4 && p.parentElement;i++) p = p.parentElement; return p.innerText.slice(0, 500); }")
-                log.info(f"    texte du grand-parent (500 car.) : {parent_text!r}")
-        except Exception as e:
-            log.info(f"    pas de 'Largeur de travail' trouvé ({e})")
-        text = page.inner_text("body")
-        log.info(f"    body text (1000 car.) : {text[:1000]!r}")
-    except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
-
-
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
+        # Bogballe : chaîne d'ancêtres
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/m60w-plus/", "Bogballe M60W-Plus (round2)")
+        page.goto("https://www.bogballe.com/fr/epandeurs-dengrais/modeles/m60w-plus/", timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2500)
+        loc = page.get_by_text("Largeur de travail", exact=False).first
+        info = loc.evaluate("""el => {
+            const chain = [];
+            let p = el;
+            for (let i = 0; i < 10 && p; i++) {
+                chain.push({tag: p.tagName, cls: p.className, textLen: p.innerText ? p.innerText.length : 0});
+                p = p.parentElement;
+            }
+            return chain;
+        }""")
+        log.info(f"Chaîne d'ancêtres Bogballe : {info}")
+        # trouver le container avec le texte le plus complet mais pas toute la page
+        for lvl in info:
+            log.info(f"  {lvl}")
         page.close()
 
+        # Berthoud : cliquer sur Caractéristiques techniques
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://sky-agriculture.com/produits/fertilisation/dx20/", "Sky Agriculture DX20")
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.berthoud.com/vega/", "Berthoud Vega")
+        page.goto("https://www.berthoud.com/vega/", timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        try:
+            loc = page.get_by_text("Caractéristiques techniques", exact=False).first
+            loc.click(timeout=3000)
+            page.wait_for_timeout(2500)
+            log.info(f"Après clic, URL = {page.url}")
+            tables = page.query_selector_all("table")
+            log.info(f"  {len(tables)} table(s) après clic")
+            for t in tables[:2]:
+                rows = t.query_selector_all("tr")
+                for r in rows[:8]:
+                    cells = r.query_selector_all("td, th")
+                    log.info(f"    row: {[c.inner_text().strip()[:40] for c in cells]}")
+            text = page.inner_text("body")
+            idx = text.lower().find("caractéristique")
+            log.info(f"  contexte texte (600 car.) : {text[idx:idx+600]!r}")
+        except Exception as e:
+            log.warning(f"Berthoud clic échec : {e}")
         page.close()
 
         browser.close()
