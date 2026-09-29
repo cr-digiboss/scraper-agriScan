@@ -2886,8 +2886,9 @@ def _horsch_facts(page) -> dict:
     regroupées dans un conteneur dont la classe contient 'fact' (ex.
     'keyfacts')."""
     specs = {}
-    container = page.query_selector("[class*='fact']")
-    if not container:
+    try:
+        container = page.wait_for_selector("[class*='fact']", timeout=6000)
+    except Exception:
         return specs
     for div in container.query_selector_all("div"):
         smalls = div.query_selector_all("small")
@@ -2920,7 +2921,6 @@ def scrape_horsch(page: Page, existing_keys: set) -> list[Machine]:
 
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
