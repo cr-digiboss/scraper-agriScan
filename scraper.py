@@ -2851,7 +2851,10 @@ def scrape_vicon(page: Page, existing_keys: set) -> list[Machine]:
 
         m = Machine()
         m.brand = "Vicon"
-        m.name = _clean_vicon_title(page.title())
+        # La 1ère ligne du tableau donne le nom exact du modèle ; le <title>
+        # de la page combine parfois plusieurs modèles proches (ex. "705 EVO
+        # - 705 VARIO") et est donc moins fiable.
+        m.name = specs.pop("Caractéristiques", "") or _clean_vicon_title(page.title())
         m.category = normaliser_categorie(category_slug, subcategory_slug, m.name)
         m.subcategory = _humanize_slug(subcategory_slug)
         m.sourceUrl = url
@@ -2958,8 +2961,8 @@ def scrape_horsch(page: Page, existing_keys: set) -> list[Machine]:
                 continue
             clean_href = href.split("?")[0].split("#")[0]
             segments = [s for s in urlparse(clean_href).path.split("/") if s]
-            # limite : catégorie (2) / sous-catégorie (3) / modèle (4)
-            if len(segments) <= 4 and clean_href not in visited:
+            # /fr/produits (2) / catégorie (3) / sous-catégorie (4) / modèle (5)
+            if len(segments) <= 5 and clean_href not in visited:
                 to_visit.append(clean_href)
 
     log.info(f"  Horsch → {found} machines trouvées")
