@@ -1,10 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 2 round 2 : URLs corrigées.
-- Rauch : /fr/ 404 mais domaine répond -> dumper tous les liens de la page racine
-- Sulky : sulky-burel.com/products/fertilisation/ trouvé via recherche web
-- Berthoud : tester berthoud.fr/fr/ directement (évite la course de redirections)
-- Bogballe : explorer la page /modeles/ (fonctionne déjà)
+Lot 2 round 3 :
+- Rauch : contenu servi en allemand malgré tout, chercher la version FR
+  (land-waehlen.html = sélecteur de pays, ou header Accept-Language)
+- Sulky : ERR_CONNECTION_REFUSED sur 2 chemins différents -> probablement
+  bloqué depuis cet environnement, retester avec une page fraîche pour
+  écarter un bug de script
+- Berthoud / Bogballe : ré-tester avec une page fraîche (le round 2 a eu des
+  navigations interrompues à cause de la réutilisation de la même page)
 """
 
 import logging
@@ -41,15 +44,36 @@ def dump(page, url, label, keyword_filter=None):
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(user_agent=UA)
 
-        dump(page, "https://rauch.de/", "Rauch racine")
-        dump(page, "https://www.sulky-burel.com/products/fertilisation/", "Sulky fertilisation")
-        dump(page, "https://www.berthoud.fr/fr/", "Berthoud FR")
+        # Rauch : chercher la version FR
+        page = browser.new_page(user_agent=UA, locale="fr-FR", extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9"})
+        dump(page, "https://rauch.de/land-waehlen.html", "Rauch land-waehlen")
+        page.close()
+
+        page = browser.new_page(user_agent=UA, locale="fr-FR", extra_http_headers={"Accept-Language": "fr-FR,fr;q=0.9"})
+        dump(page, "https://rauch.de/", "Rauch racine (Accept-Language fr)")
+        page.close()
+
+        # Sulky : retest isolé
+        page = browser.new_page(user_agent=UA)
+        dump(page, "https://www.sulky-burel.com/", "Sulky racine (page fraîche)")
+        page.close()
+
+        page = browser.new_page(user_agent=UA)
+        dump(page, "https://sky-agriculture.com/fr/", "Sky Agriculture FR (page fraîche)")
+        page.close()
+
+        # Berthoud / Bogballe : retest isolé
+        page = browser.new_page(user_agent=UA)
+        dump(page, "https://www.berthoud.fr/fr/", "Berthoud FR (page fraîche)")
+        page.close()
+
+        page = browser.new_page(user_agent=UA)
         dump(
-            page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/", "Bogballe modeles",
+            page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/", "Bogballe modeles (page fraîche)",
             keyword_filter=lambda h: "/modeles/" in h,
         )
+        page.close()
 
         browser.close()
 
