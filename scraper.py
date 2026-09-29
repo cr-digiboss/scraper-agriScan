@@ -3123,6 +3123,105 @@ def scrape_berthoud(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+HARDI_HOME = "https://hardi.com/fr/sprayers"
+HARDI_EXCLUSIONS = ["campaigns", "resale"]
+
+
+def _hardi_product_links(page: Page) -> set:
+    """Une fiche modèle HARDI a une URL à 4 segments :
+    /fr/sprayers/<type>/<modele>. Les pages catégorie n'ont que 3 segments
+    (/fr/sprayers/<type>), ce qui les exclut naturellement."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "hardi.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) != 4 or segments[:2] != ["fr", "sprayers"]:
+            continue
+        if segments[2] in HARDI_EXCLUSIONS or segments[3] == "technical-specifications":
+            continue
+        links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _hardi_specs(page) -> dict:
+    """Les caractéristiques HARDI sont sous un onglet 'Spécifications
+    techniques' à cliquer pour afficher le tableau (souvent multi-sections :
+    capacités de cuve en colonnes, plusieurs rampes/dimensions en lignes)."""
+    try:
+        page.get_by_text("Spécifications techniques", exact=False).first.click(timeout=3000)
+        page.wait_for_timeout(2000)
+    except Exception:
+        return {}
+
+    specs = {}
+    for table in page.query_selector_all("table"):
+        for row in table.query_selector_all("tr"):
+            cells = row.query_selector_all("td, th")
+            if not cells:
+                continue
+            label = clean(cells[0].inner_text())
+            values = [clean(c.inner_text()) for c in cells[1:]]
+            values = [v for v in values if v]
+            if label and values:
+                specs[label] = " / ".join(values)
+    return specs
+
+
+def scrape_hardi(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles HARDI (pulvérisation, hardi.com/fr) non
+    encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(HARDI_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"  Hardi inaccessible : {e}")
+        return machines
+
+    product_links = _hardi_product_links(page)
+    log.info(f"  Hardi → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        specs = _hardi_specs(page)
+        if not specs:
+            continue
+
+        name = clean(page.title()).split("–")[0].strip()
+        if not name or len(name) < 2:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug = segments[2] if len(segments) > 2 else ""
+
+        key = f"Hardi|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Hardi"
+        m.name = name
+        m.category = normaliser_categorie(category_slug, name)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -3200,6 +3299,7 @@ def run() -> int:
             ("Vicon (fr.vicon.eu)", scrape_vicon),
             ("Horsch (horsch.com)", scrape_horsch),
             ("Sulky (sky-agriculture.com)", scrape_sulky),
+            ("Hardi (hardi.com)", scrape_hardi),
             ("Berthoud (berthoud.com)", scrape_berthoud),
         ]:
             log.info(f"Source : {nom_source}")
