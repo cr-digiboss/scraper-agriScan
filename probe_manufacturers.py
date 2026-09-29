@@ -1,11 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Le fix wait_for_selector(state="attached") échoue quasi instantanément
-(pas un vrai timeout de 6s) -> logger l'exception réelle pour comprendre.
+Le conteneur "[class*='fact']" est trouvé instantanément et son inner_text
+contient bien les données -> le bug est dans la boucle sur les divs enfants
+(small+strong). Logger le détail div par div.
 """
 
 import logging
-import time
 
 from playwright.sync_api import sync_playwright
 
@@ -26,22 +26,18 @@ def main():
         url = "https://www.horsch.com/fr/produits/travail-du-sol/dechaumeur-a-disques/joker-4-6-hd"
         page.goto(url, timeout=30000, wait_until="domcontentloaded")
 
-        t0 = time.time()
-        try:
-            container = page.wait_for_selector("[class*='fact']", timeout=6000, state="attached")
-            log.info(f"OK en {time.time()-t0:.2f}s : {container}")
-        except Exception as e:
-            log.error(f"ECHEC en {time.time()-t0:.2f}s : {type(e).__name__}: {e}")
+        container = page.wait_for_selector("[class*='fact']", timeout=6000, state="attached")
+        log.info(f"container trouvé : {container}")
 
-        # Vérifier avec query_selector simple (sans wait) juste après domcontentloaded
-        c2 = page.query_selector("[class*='fact']")
-        log.info(f"query_selector direct (sans wait) juste après domcontentloaded : {c2}")
-
-        page.wait_for_timeout(3000)
-        c3 = page.query_selector("[class*='fact']")
-        log.info(f"query_selector direct après 3s d'attente : {c3}")
-        if c3:
-            log.info(f"  inner_text (300 car.) : {c3.inner_text()[:300]!r}")
+        divs = container.query_selector_all("div")
+        log.info(f"{len(divs)} div(s) enfant(s) trouvé(s)")
+        for i, div in enumerate(divs):
+            smalls = div.query_selector_all("small")
+            strong = div.query_selector("strong")
+            cls = div.get_attribute("class")
+            log.info(f"  div[{i}] class={cls!r} smalls={len(smalls)} strong={'oui' if strong else 'non'}")
+            if smalls and strong:
+                log.info(f"    -> label={smalls[0].inner_text()!r} value={strong.inner_text()!r}")
 
         browser.close()
 
