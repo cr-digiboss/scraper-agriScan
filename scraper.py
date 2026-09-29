@@ -3146,6 +3146,21 @@ def _hardi_product_links(page: Page) -> set:
     return links
 
 
+def _accept_cookies(page) -> bool:
+    """Ferme le bandeau de consentement cookies s'il est présent, pour ne
+    pas bloquer les clics sur les onglets/éléments de la page."""
+    for text in ["Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter"]:
+        try:
+            btn = page.get_by_text(text, exact=False).first
+            if btn.is_visible(timeout=1500):
+                btn.click(timeout=1500)
+                page.wait_for_timeout(1000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _hardi_specs(page) -> dict:
     """Les caractéristiques HARDI sont sous un onglet 'Spécifications
     techniques' à cliquer pour afficher le tableau (souvent multi-sections :
@@ -3177,6 +3192,7 @@ def scrape_hardi(page: Page, existing_keys: set) -> list[Machine]:
     try:
         page.goto(HARDI_HOME, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
+        _accept_cookies(page)
     except Exception as e:
         log.warning(f"  Hardi inaccessible : {e}")
         return machines
@@ -3188,16 +3204,20 @@ def scrape_hardi(page: Page, existing_keys: set) -> list[Machine]:
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(2000)
+            _accept_cookies(page)
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
 
-        specs = _hardi_specs(page)
-        if not specs:
-            continue
-
+        # Le nom doit être capturé AVANT de cliquer sur l'onglet specs : le
+        # clic modifie le <title> de la page (routage client), qui devient
+        # par ex. "Spécifications techniques :: HARDI" au lieu du modèle.
         name = clean(page.title()).split("–")[0].strip()
         if not name or len(name) < 2:
+            continue
+
+        specs = _hardi_specs(page)
+        if not specs:
             continue
 
         segments = [s for s in urlparse(url).path.split("/") if s]
