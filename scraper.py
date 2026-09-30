@@ -3242,6 +3242,127 @@ def scrape_hardi(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+ROPA_HOME = "https://www.ropa-maschinenbau.de/fr/produits/"
+
+
+def _ropa_product_links(page: Page) -> set:
+    """Une fiche modèle ROPA a une URL à 2 segments sous /fr/produits/ :
+    /fr/produits/<famille>/<modele>/. Toutes sont listées directement sur
+    la page /fr/produits/, pas de crawl récursif nécessaire."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "ropa-maschinenbau.de" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 4 and segments[:2] == ["fr", "produits"]:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _ropa_specs(text: str) -> dict:
+    """Les fiches produit ROPA n'ont pas de <table> pour les caractéristiques
+    techniques : après clic sur l'onglet 'Caractéristiques techniques', le
+    contenu est du texte libre où chaque ligne ou groupe de lignes est séparé
+    par une ligne vide. Un bloc tout en majuscules est un intitulé de
+    caractéristique (ex. 'LONGUEUR', 'CAPACITÉ DE TRÉMIE') ; les blocs
+    suivants jusqu'au prochain intitulé sont ses valeurs (parfois plusieurs,
+    ex. plusieurs largeurs selon variante), jointes par ' / '."""
+    specs = {}
+    label = None
+    values = []
+    for block in text.split("\n\n"):
+        lines = [clean(l) for l in block.split("\n") if clean(l)]
+        if not lines:
+            continue
+        block_clean = " ".join(lines)
+        is_heading = block_clean == block_clean.upper() and len(block_clean) < 80
+        if is_heading:
+            if label and values:
+                specs[label] = " / ".join(values)
+            label = block_clean
+            values = []
+        elif label:
+            values.append(block_clean)
+    if label and values:
+        specs[label] = " / ".join(values)
+    return specs
+
+
+def scrape_ropa(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles ROPA (arracheuses de betteraves et machines
+    pour pommes de terre, ropa-maschinenbau.de) non encore présentes dans
+    Neon."""
+    machines = []
+    try:
+        page.goto(ROPA_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        _accept_cookies(page)
+    except Exception as e:
+        log.warning(f"  Ropa inaccessible : {e}")
+        return machines
+
+    product_links = _ropa_product_links(page)
+    log.info(f"  Ropa → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            _accept_cookies(page)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        # Le nom doit être capturé AVANT de cliquer sur l'onglet specs : le
+        # clic modifie le <title> de la page (routage client), qui devient
+        # "Caractéristiques techniques" au lieu du modèle.
+        name = clean(page.title()).split("|")[0].strip()
+        if not name or len(name) < 2:
+            continue
+
+        try:
+            page.get_by_text("CARACTÉRISTIQUES TECHNIQUES", exact=False).first.click(timeout=3000)
+            page.wait_for_timeout(2000)
+        except Exception:
+            continue
+
+        text = page.inner_text("body")
+        idx = text.rfind("CARACTÉRISTIQUES TECHNIQUES")
+        if idx == -1:
+            continue
+        spec_text = text[idx:]
+        footer_idx = spec_text.find("SUIVEZ-NOUS SUR LES RÉSEAUX SOCIAUX")
+        if footer_idx != -1:
+            spec_text = spec_text[:footer_idx]
+        specs = _ropa_specs(spec_text)
+        if not specs:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug = segments[2] if len(segments) > 2 else ""
+
+        key = f"Ropa|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Ropa"
+        m.name = name
+        m.category = normaliser_categorie(category_slug, name)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Ropa → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -3321,6 +3442,7 @@ def run() -> int:
             ("Sulky (sky-agriculture.com)", scrape_sulky),
             ("Hardi (hardi.com)", scrape_hardi),
             ("Berthoud (berthoud.com)", scrape_berthoud),
+            ("Ropa (ropa-maschinenbau.de)", scrape_ropa),
         ]:
             log.info(f"Source : {nom_source}")
             try:
