@@ -3366,6 +3366,13 @@ def scrape_ropa(page: Page, existing_keys: set) -> list[Machine]:
 SAMSON_HOME = "https://www.samson-agro.com/fr/"
 SAMSON_CATEGORIES = ["epandeurs", "tonnes-a-lisier", "autres-equipements", "techniques-application"]
 
+# Intitulés de la navigation d'en-tête/pied de page (identiques sur toutes
+# les fiches), à retirer des specs car ce ne sont pas des caractéristiques.
+SAMSON_FOOTER_HEADINGS = [
+    "CONTACT", "SOLUTIONS", "ENTREPRISE", "SERVICE ET PIÈCES",
+    "SAMSON ACADEMY", "UN PROJET ?", "SERVICES ET PIÈCES",
+]
+
 
 def _samson_product_links(page: Page) -> set:
     """Une fiche modèle SAMSON a une URL à 2 segments sous /fr/ :
@@ -3452,6 +3459,8 @@ def scrape_samson(page: Page, existing_keys: set) -> list[Machine]:
         if footer_idx != -1:
             text = text[:footer_idx]
         specs = _samson_specs(text)
+        for noise_key in SAMSON_FOOTER_HEADINGS:
+            specs.pop(noise_key, None)
         if not specs:
             continue
 
