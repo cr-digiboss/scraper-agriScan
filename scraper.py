@@ -3440,6 +3440,13 @@ def scrape_samson(page: Page, existing_keys: set) -> list[Machine]:
         if not name or len(name) < 2:
             continue
 
+        # Le contenu technique (CHIFFRES CLÉS, sections descriptives) est en
+        # chargement différé : il ne s'affiche qu'après défilement de la page.
+        for _ in range(8):
+            page.mouse.wheel(0, 1500)
+            page.wait_for_timeout(300)
+        page.wait_for_timeout(1000)
+
         text = page.inner_text("body")
         footer_idx = text.find("Copyright ©")
         if footer_idx != -1:
