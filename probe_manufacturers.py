@@ -1,7 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 5 round 1 : identification des sites FR et de la structure catalogue
-pour Veenhuis, Pichon, Samson.
+Lot 5 round 2 :
+- Samson : fiche produit (epandeurs/samson-flex-ii) pour voir la structure des specs
+- Pichon : fiche gamme (gamme-pichon/gamme-mk) pour voir la structure des specs
+- Veenhuis : dump de home.veenhuis.com pour trouver le vrai catalogue
 """
 
 import logging
@@ -35,9 +37,30 @@ def accept_cookies(page):
     return False
 
 
-def dump_links(page, url, label):
+def inspect(page, url, label):
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        accept_cookies(page)
+        page.wait_for_timeout(1500)
+        log.info(f"\n--- {label} : {url} title={page.title()!r}")
+        tables = page.query_selector_all("table")
+        log.info(f"    {len(tables)} table(s)")
+        for i, t in enumerate(tables[:3]):
+            rows = t.query_selector_all("tr")
+            log.info(f"    table {i}: {len(rows)} rows")
+            for r in rows[:8]:
+                cells = r.query_selector_all("td, th")
+                log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
+        text = page.inner_text("body")
+        log.info(f"    body text (900 car.) : {text[:900]!r}")
+    except Exception as e:
+        log.warning(f"  {label} : échec ({e})")
+
+
+def dump_links(page, url, label):
+    try:
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(2500)
         accept_cookies(page)
         page.wait_for_timeout(1000)
@@ -57,15 +80,15 @@ def main():
         browser = p.chromium.launch()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.veenhuis.com/fr/", "Veenhuis home FR")
+        inspect(page, "https://www.samson-agro.com/fr/epandeurs/samson-flex-ii/", "Samson Flex II")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.pichonindustries.com/fr/", "Pichon home FR")
+        inspect(page, "https://www.pichonindustries.fr/gamme-pichon/gamme-mk/", "Pichon gamme MK")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.samson-agro.com/fr/", "Samson home FR")
+        dump_links(page, "https://home.veenhuis.com/fr", "Veenhuis home.veenhuis.com FR")
         page.close()
 
         browser.close()
