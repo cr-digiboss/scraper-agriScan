@@ -3534,8 +3534,6 @@ def run() -> int:
             viewport={"width": 1280, "height": 800},
             locale="fr-FR",
         )
-        page = context.new_page()
-
         # Sources légères en premier (catalogue complet en quelques minutes),
         # TractorData en dernier car son crawl de 12 marques est le plus long.
         for nom_source, scraper_fn in [
@@ -3570,11 +3568,19 @@ def run() -> int:
             ("Samson (samson-agro.com)", scrape_samson),
         ]:
             log.info(f"Source : {nom_source}")
+            # Une page dédiée par source : une redirection asynchrone tardive
+            # d'un site (ex. Berthoud) peut sinon interrompre le goto() de la
+            # source suivante sur une page partagée, en cascade sur tout le
+            # reste de la liste (observé en production : Ropa + les 12
+            # marques TractorData annulées d'un coup par ce mécanisme).
+            page = context.new_page()
             try:
                 machines = scraper_fn(page, existing_keys)
             except Exception as e:
                 log.error(f"  ❌ Échec {nom_source} : {e}")
+                page.close()
                 continue
+            page.close()
             if machines:
                 ok, err, q_ok, q_err = _upsert_and_index(machines)
                 total_ok += ok
@@ -3587,7 +3593,11 @@ def run() -> int:
 
         for marque, liste_url in MARQUES.items():
             log.info(f"Marque : {marque}")
-            machines = scrape_marque(page, marque, liste_url, existing_keys)
+            page = context.new_page()
+            try:
+                machines = scrape_marque(page, marque, liste_url, existing_keys)
+            finally:
+                page.close()
             if machines:
                 ok, err, q_ok, q_err = _upsert_and_index(machines)
                 total_ok += ok
