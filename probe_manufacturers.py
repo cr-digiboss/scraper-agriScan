@@ -1,11 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 4 round 3 :
-- Ropa : re-essai avec timeout plus long + dump liens de la page catégorie
-- Holmer : accepte cookies DE puis dump liens de la page hub terra-dos
-- Joskin : dump liens d'une page catégorie (épandeurs-de-lisier)
-- Vredo : dump liens de la home FR + inspection solutions-agri pour voir
-  s'il existe une vraie ligne de produits en FR
+Lot 4 round 4 :
+- Ropa : clique "CARACTÉRISTIQUES TECHNIQUES" sur panther-2s puis inspecte le tableau ;
+  dump des liens de /fr/produits/ (page parente) pour lister toutes les familles
+- Joskin : inspecte une fiche modèle réelle (epandeurs-de-lisier/alpina2)
 """
 
 import logging
@@ -23,8 +21,6 @@ UA = (
 
 COOKIE_TEXTS = [
     "Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter",
-    "Cookies zulassen", "Auswahl erlauben", "Alle akzeptieren",
-    "Nur notwendige Cookies verwenden",
 ]
 
 
@@ -41,24 +37,37 @@ def accept_cookies(page):
     return False
 
 
-def inspect(page, url, label):
+def dump_tables(page, label):
+    tables = page.query_selector_all("table")
+    log.info(f"    {len(tables)} table(s)")
+    for i, t in enumerate(tables[:3]):
+        rows = t.query_selector_all("tr")
+        log.info(f"    table {i}: {len(rows)} rows")
+        for r in rows[:8]:
+            cells = r.query_selector_all("td, th")
+            log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
+
+
+def ropa_click_specs(page, url):
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(2000)
         accept_cookies(page)
-        page.wait_for_timeout(1500)
-        log.info(f"\n--- {label} : {url} title={page.title()!r}")
-        tables = page.query_selector_all("table")
-        log.info(f"    {len(tables)} table(s)")
-        for i, t in enumerate(tables[:2]):
-            rows = t.query_selector_all("tr")
-            for r in rows[:6]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
-        text = page.inner_text("body")
-        log.info(f"    body text (700 car.) : {text[:700]!r}")
+        page.wait_for_timeout(1000)
+        log.info(f"\n--- Ropa Panther 2S : title avant clic = {page.title()!r}")
+        try:
+            tab = page.get_by_text("CARACTÉRISTIQUES TECHNIQUES", exact=False).first
+            tab.click(timeout=5000)
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            log.warning(f"    clic échec : {e}")
+        log.info(f"    title après clic = {page.title()!r}")
+        dump_tables(page, "ropa")
+        if not page.query_selector_all("table"):
+            text = page.inner_text("body")
+            log.info(f"    body text post-clic (1200 car.) : {text[:1200]!r}")
     except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
+        log.warning(f"  Ropa : échec ({e})")
 
 
 def dump_links(page, url, label):
@@ -78,32 +87,34 @@ def dump_links(page, url, label):
         log.warning(f"  {label} : échec ({e})")
 
 
+def inspect(page, url, label):
+    try:
+        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        accept_cookies(page)
+        page.wait_for_timeout(1500)
+        log.info(f"\n--- {label} : {url} title={page.title()!r}")
+        dump_tables(page, label)
+        text = page.inner_text("body")
+        log.info(f"    body text (700 car.) : {text[:700]!r}")
+    except Exception as e:
+        log.warning(f"  {label} : échec ({e})")
+
+
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/", "Ropa catégorie arracheuse-de-betteraves")
+        ropa_click_specs(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/panther-2s/")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/panther-2s/", "Ropa Panther 2S (retry)")
+        dump_links(page, "https://www.ropa-maschinenbau.de/fr/produits/", "Ropa produits (page parente, toutes familles)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.holmer-maschinenbau.com/fr/produits/terra-dos", "Holmer terra-dos hub (retry cookies DE)")
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.joskin.com/fr/%C3%A9pandeurs-de-lisier", "Joskin épandeurs-de-lisier")
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.vredo.com/fr/", "Vredo home FR")
-        page.close()
-
-        page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.vredo.com/fr/produits/solutions-agri/", "Vredo solutions-agri")
+        inspect(page, "https://www.joskin.com/fr/epandeurs-de-lisier/alpina2", "Joskin Alpina2")
         page.close()
 
         browser.close()
