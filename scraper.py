@@ -3363,6 +3363,130 @@ def scrape_ropa(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+SAMSON_HOME = "https://www.samson-agro.com/fr/"
+SAMSON_CATEGORIES = ["epandeurs", "tonnes-a-lisier", "autres-equipements", "techniques-application"]
+
+# Intitulés de la navigation d'en-tête/pied de page (identiques sur toutes
+# les fiches), à retirer des specs car ce ne sont pas des caractéristiques.
+SAMSON_FOOTER_HEADINGS = [
+    "CONTACT", "SOLUTIONS", "ENTREPRISE", "SERVICE ET PIÈCES",
+    "SAMSON ACADEMY", "UN PROJET ?", "SERVICES ET PIÈCES",
+]
+
+
+def _samson_product_links(page: Page) -> set:
+    """Une fiche modèle SAMSON a une URL à 2 segments sous /fr/ :
+    /fr/<categorie>/<modele>/, où <categorie> est une des catégories connues
+    du catalogue (les autres pages à 2 segments sont du contenu institutionnel
+    : à-propos, carrière, contact...)."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "samson-agro.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if len(segments) == 3 and segments[0] == "fr" and segments[1] in SAMSON_CATEGORIES:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _samson_specs(text: str) -> dict:
+    """Les fiches produit SAMSON n'ont pas de <table> : le texte est composé
+    de lignes, chaque ligne toute en majuscules étant un intitulé de section
+    (ex. 'CONCEPTION POLYVALENTE'), suivi de phrases descriptives (valeurs)
+    jusqu'à l'intitulé suivant. Contrairement à HORSCH/ROPA, les lignes ne
+    sont pas séparées par une ligne vide, d'où un parsing ligne à ligne
+    plutôt que par bloc."""
+    specs = {}
+    label = None
+    values = []
+    for raw_line in text.split("\n"):
+        line = clean(raw_line)
+        if not line:
+            continue
+        is_heading = line == line.upper() and len(line) < 80
+        if is_heading:
+            if label and values:
+                specs[label] = " / ".join(values)
+            label = line
+            values = []
+        elif label:
+            values.append(line)
+    if label and values:
+        specs[label] = " / ".join(values)
+    return specs
+
+
+def scrape_samson(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles SAMSON (matériel d'épandage/tonnes à lisier,
+    samson-agro.com, groupe Samson/Pichon) non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(SAMSON_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        _accept_cookies(page)
+    except Exception as e:
+        log.warning(f"  Samson inaccessible : {e}")
+        return machines
+
+    product_links = _samson_product_links(page)
+    log.info(f"  Samson → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            _accept_cookies(page)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        name = clean(page.title()).split("|")[0].strip()
+        name = name.replace("Épandeurs", "").replace("Tonnes à lisier", "").strip()
+        if not name or len(name) < 2:
+            continue
+
+        # Le contenu technique (CHIFFRES CLÉS, sections descriptives) est en
+        # chargement différé : il ne s'affiche qu'après défilement de la page.
+        for _ in range(8):
+            page.mouse.wheel(0, 1500)
+            page.wait_for_timeout(300)
+        page.wait_for_timeout(1000)
+
+        text = page.inner_text("body")
+        footer_idx = text.find("Copyright ©")
+        if footer_idx != -1:
+            text = text[:footer_idx]
+        specs = _samson_specs(text)
+        for noise_key in SAMSON_FOOTER_HEADINGS:
+            specs.pop(noise_key, None)
+        if not specs:
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        category_slug = segments[1] if len(segments) > 1 else ""
+
+        key = f"Samson|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Samson"
+        m.name = name
+        m.category = normaliser_categorie(category_slug, name)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Samson → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -3443,6 +3567,7 @@ def run() -> int:
             ("Hardi (hardi.com)", scrape_hardi),
             ("Berthoud (berthoud.com)", scrape_berthoud),
             ("Ropa (ropa-maschinenbau.de)", scrape_ropa),
+            ("Samson (samson-agro.com)", scrape_samson),
         ]:
             log.info(f"Source : {nom_source}")
             try:
