@@ -3332,7 +3332,11 @@ def scrape_ropa(page: Page, existing_keys: set) -> list[Machine]:
         idx = text.rfind("CARACTÉRISTIQUES TECHNIQUES")
         if idx == -1:
             continue
-        specs = _ropa_specs(text[idx:])
+        spec_text = text[idx:]
+        footer_idx = spec_text.find("SUIVEZ-NOUS SUR LES RÉSEAUX SOCIAUX")
+        if footer_idx != -1:
+            spec_text = spec_text[:footer_idx]
+        specs = _ropa_specs(spec_text)
         if not specs:
             continue
 
