@@ -1,11 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 4 round 2 :
-- Ropa : fiche produit (panther-2s)
-- Holmer : fiche produit (terra-dos/machines-de-base)
-- Joskin : dump de /fr/notre-gamme pour trouver les vraies fiches modèle
-- Vredo : dump de /fr/produits/ pour comprendre pourquoi le materiel a
-  lisier n'apparait pas en FR (les liens mesttechniek sont en NL)
+Lot 4 round 3 :
+- Ropa : re-essai avec timeout plus long + dump liens de la page catégorie
+- Holmer : accepte cookies DE puis dump liens de la page hub terra-dos
+- Joskin : dump liens d'une page catégorie (épandeurs-de-lisier)
+- Vredo : dump liens de la home FR + inspection solutions-agri pour voir
+  s'il existe une vraie ligne de produits en FR
 """
 
 import logging
@@ -21,9 +21,15 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+COOKIE_TEXTS = [
+    "Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter",
+    "Cookies zulassen", "Auswahl erlauben", "Alle akzeptieren",
+    "Nur notwendige Cookies verwenden",
+]
+
 
 def accept_cookies(page):
-    for text in ["Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter"]:
+    for text in COOKIE_TEXTS:
         try:
             btn = page.get_by_text(text, exact=False).first
             if btn.is_visible(timeout=1500):
@@ -50,14 +56,14 @@ def inspect(page, url, label):
                 cells = r.query_selector_all("td, th")
                 log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
         text = page.inner_text("body")
-        log.info(f"    body text (900 car.) : {text[:900]!r}")
+        log.info(f"    body text (700 car.) : {text[:700]!r}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
 
 
 def dump_links(page, url, label):
     try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(2500)
         accept_cookies(page)
         page.wait_for_timeout(1000)
@@ -66,7 +72,7 @@ def dump_links(page, url, label):
         netloc = urlparse(page.url).netloc
         same = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if netloc in urlparse(h).netloc))
         log.info(f"  {len(same)} liens")
-        for h in same[:60]:
+        for h in same[:80]:
             log.info(f"    {h}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
@@ -77,19 +83,27 @@ def main():
         browser = p.chromium.launch()
 
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/panther-2s/", "Ropa Panther 2S")
+        dump_links(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/", "Ropa catégorie arracheuse-de-betteraves")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.holmer-maschinenbau.com/fr/produits/terra-dos/machines-de-base", "Holmer Terra Dos machines-de-base")
+        inspect(page, "https://www.ropa-maschinenbau.de/fr/produits/arracheuse-de-betteraves/panther-2s/", "Ropa Panther 2S (retry)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.joskin.com/fr/notre-gamme", "Joskin notre-gamme")
+        dump_links(page, "https://www.holmer-maschinenbau.com/fr/produits/terra-dos", "Holmer terra-dos hub (retry cookies DE)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.vredo.com/fr/produits/", "Vredo produits FR")
+        dump_links(page, "https://www.joskin.com/fr/%C3%A9pandeurs-de-lisier", "Joskin épandeurs-de-lisier")
+        page.close()
+
+        page = browser.new_page(user_agent=UA)
+        dump_links(page, "https://www.vredo.com/fr/", "Vredo home FR")
+        page.close()
+
+        page = browser.new_page(user_agent=UA)
+        inspect(page, "https://www.vredo.com/fr/produits/solutions-agri/", "Vredo solutions-agri")
         page.close()
 
         browser.close()
