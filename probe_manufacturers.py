@@ -1,7 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 4 (suite) : essai d'extraction de données techniques depuis des PDF
-pour Holmer et Joskin (aucune donnée structurée trouvée en HTML).
+Lot 4 (suite 2) :
+- Holmer : scan des 48 pages du PDF pour trouver une éventuelle page de
+  caractéristiques techniques (table ou texte avec mots-clés)
+- Joskin : inspection du PDF spécifique au modèle (focus_alpina2_-_FR.pdf)
 """
 
 import io
@@ -9,7 +11,6 @@ import logging
 
 import pdfplumber
 import requests
-from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
@@ -19,72 +20,66 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+KEYWORDS = ["caractéristiques techniques", "données techniques", "dimensions", "poids", "puissance"]
 
-def inspect_pdf(url, label):
+
+def scan_pdf_for_specs(url, label):
     try:
         r = requests.get(url, headers={"User-Agent": UA}, timeout=30)
         r.raise_for_status()
         log.info(f"\n--- {label} : {url} ({len(r.content)} octets)")
         with pdfplumber.open(io.BytesIO(r.content)) as pdf:
             log.info(f"    {len(pdf.pages)} page(s)")
-            for i, page in enumerate(pdf.pages[:6]):
+            for i, page in enumerate(pdf.pages):
+                text = (page.extract_text() or "").lower()
+                tables = page.extract_tables()
+                real_tables = [t for t in tables if len(t) > 1 and any(any(c for c in row) for row in t)]
+                hit = any(k in text for k in KEYWORDS)
+                if real_tables or hit:
+                    log.info(f"    page {i+1}: {len(real_tables)} table(s) réelle(s), mot-clé={hit}")
+                    if real_tables:
+                        for t in real_tables[:2]:
+                            for row in t[:10]:
+                                log.info(f"      row: {row}")
+                    elif hit:
+                        raw = page.extract_text() or ""
+                        log.info(f"      texte (800 car.) : {raw[:800]!r}")
+    except Exception as e:
+        log.warning(f"  {label} : échec ({e})")
+
+
+def inspect_pdf_full(url, label):
+    try:
+        r = requests.get(url, headers={"User-Agent": UA}, timeout=30)
+        r.raise_for_status()
+        log.info(f"\n--- {label} : {url} ({len(r.content)} octets)")
+        with pdfplumber.open(io.BytesIO(r.content)) as pdf:
+            log.info(f"    {len(pdf.pages)} page(s)")
+            for i, page in enumerate(pdf.pages):
                 text = page.extract_text() or ""
                 tables = page.extract_tables()
-                log.info(f"    page {i+1}: {len(text)} car. texte, {len(tables)} table(s)")
-                if tables:
-                    for t in tables[:2]:
-                        for row in t[:6]:
+                real_tables = [t for t in tables if len(t) > 1]
+                log.info(f"    page {i+1}: {len(text)} car. texte, {len(real_tables)} table(s)")
+                if real_tables:
+                    for t in real_tables[:3]:
+                        for row in t[:10]:
                             log.info(f"      row: {row}")
                 elif text:
-                    log.info(f"      texte (500 car.) : {text[:500]!r}")
+                    log.info(f"      texte (600 car.) : {text[:600]!r}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
-
-
-def find_pdf_links(page, url, label):
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(2000)
-        for text in ["Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter",
-                     "ACCEPTER LES COOKIES ESSENTIELS UNIQUEMENT"]:
-            try:
-                btn = page.get_by_text(text, exact=False).first
-                if btn.is_visible(timeout=1200):
-                    btn.click(timeout=1200)
-                    page.wait_for_timeout(800)
-                    break
-            except Exception:
-                continue
-        page.wait_for_timeout(1000)
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        pdfs = sorted(set(h for h in hrefs if h.lower().endswith(".pdf")))
-        log.info(f"\n=== {label} : {url} — {len(pdfs)} PDF(s) trouvé(s)")
-        for h in pdfs[:20]:
-            log.info(f"    {h}")
-        return pdfs
-    except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
-        return []
 
 
 def main():
-    # Holmer : PDF déjà identifié lors du sondage précédent
-    inspect_pdf(
+    scan_pdf_for_specs(
         "https://www.holmer-maschinenbau.com/fileadmin/PDF/Produkt-PDFe/WEB_2025-05-12_Terra_Dos_5_Prospekt_FR.pdf",
-        "Holmer Terra Dos 5 (brochure FR)",
+        "Holmer Terra Dos 5 — scan complet",
     )
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-
-        page = browser.new_page(user_agent=UA)
-        pdfs = find_pdf_links(page, "https://www.joskin.com/fr/epandeurs-de-lisier/alpina2", "Joskin Alpina2")
-        page.close()
-
-        browser.close()
-
-    for pdf_url in pdfs[:2]:
-        inspect_pdf(pdf_url, f"Joskin PDF ({pdf_url.split('/')[-1]})")
+    inspect_pdf_full(
+        "https://quote.joskin.com/system/attachments/files/000/000/561/original/focus_alpina2_-_FR.pdf",
+        "Joskin focus_alpina2_FR",
+    )
 
 
 if __name__ == "__main__":
