@@ -1,9 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 5 round 2 :
-- Samson : fiche produit (epandeurs/samson-flex-ii) pour voir la structure des specs
-- Pichon : fiche gamme (gamme-pichon/gamme-mk) pour voir la structure des specs
-- Veenhuis : dump de home.veenhuis.com pour trouver le vrai catalogue
+Lot 5 round 3 :
+- Samson : scroll + dump complet pour voir si "CHIFFRES CLÉS" contient des
+  valeurs numériques (chargement différé ?)
+- Pichon : dump des liens de la page gamme MK (packs X.LINE, fiches modèle ?)
+- Veenhuis : essai home.veenhuis.com (racine, sans /fr) puis /en
 """
 
 import logging
@@ -37,23 +38,22 @@ def accept_cookies(page):
     return False
 
 
-def inspect(page, url, label):
+def deep_inspect(page, url, label):
     try:
         page.goto(url, timeout=25000, wait_until="domcontentloaded")
         page.wait_for_timeout(2000)
         accept_cookies(page)
+        page.wait_for_timeout(1000)
+        # scroll to bottom in steps to trigger lazy-loaded content
+        for _ in range(8):
+            page.mouse.wheel(0, 1500)
+            page.wait_for_timeout(400)
         page.wait_for_timeout(1500)
         log.info(f"\n--- {label} : {url} title={page.title()!r}")
         tables = page.query_selector_all("table")
         log.info(f"    {len(tables)} table(s)")
-        for i, t in enumerate(tables[:3]):
-            rows = t.query_selector_all("tr")
-            log.info(f"    table {i}: {len(rows)} rows")
-            for r in rows[:8]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"      row: {[c.inner_text().strip()[:40] for c in cells]}")
         text = page.inner_text("body")
-        log.info(f"    body text (900 car.) : {text[:900]!r}")
+        log.info(f"    body text complet ({len(text)} car.) : {text!r}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
 
@@ -80,15 +80,19 @@ def main():
         browser = p.chromium.launch()
 
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.samson-agro.com/fr/epandeurs/samson-flex-ii/", "Samson Flex II")
+        deep_inspect(page, "https://www.samson-agro.com/fr/epandeurs/samson-flex-ii/", "Samson Flex II (scroll complet)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://www.pichonindustries.fr/gamme-pichon/gamme-mk/", "Pichon gamme MK")
+        dump_links(page, "https://www.pichonindustries.fr/gamme-pichon/gamme-mk/", "Pichon gamme MK (liens)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://home.veenhuis.com/fr", "Veenhuis home.veenhuis.com FR")
+        dump_links(page, "https://home.veenhuis.com/", "Veenhuis home (racine)")
+        page.close()
+
+        page = browser.new_page(user_agent=UA)
+        dump_links(page, "https://home.veenhuis.com/en", "Veenhuis home EN")
         page.close()
 
         browser.close()
