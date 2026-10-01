@@ -3487,6 +3487,110 @@ def scrape_samson(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+BOGBALLE_MODELES_URL = "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/"
+
+
+def _bogballe_product_links(page: Page) -> set:
+    """Une fiche modèle BOGBALLE a une URL à 1 segment sous /modeles/
+    (ex. /fr/epandeurs-dengrais/modeles/m60w-plus/). Les "unités de
+    contrôle" (boîtiers électroniques, pas des machines) sont dans un
+    dossier séparé (/unites-de-controle/) et ne sont donc jamais
+    confondues avec des épandeurs."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "bogballe.com" not in u.netloc:
+            continue
+        segments = [s for s in u.path.split("/") if s]
+        if (
+            len(segments) == 4
+            and segments[:3] == ["fr", "epandeurs-dengrais", "modeles"]
+            and re.fullmatch(r"[a-z0-9-]+", segments[3])
+        ):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _bogballe_specs(text: str) -> dict:
+    """Les fiches produit BOGBALLE n'ont pas de <table> : le texte est une
+    alternance stricte de blocs "intitulé" / "valeur" séparés par une ligne
+    vide. Certains blocs d'intitulé contiennent un titre de section glissé
+    juste avant le vrai intitulé, sur une ligne séparée au sein du même bloc
+    (ex. "Kits de pilotages\\nCALIBRATOR ZURF") : ne garder que la dernière
+    ligne de chaque bloc élimine ces titres de section."""
+    items = []
+    for block in text.split("\n\n"):
+        lines = [clean(l) for l in block.split("\n") if clean(l)]
+        if lines:
+            items.append(lines[-1])
+
+    specs = {}
+    label = None
+    for item in items:
+        if label is None:
+            label = item
+        else:
+            specs[label] = item
+            label = None
+    return specs
+
+
+def scrape_bogballe(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles BOGBALLE (épandeurs d'engrais,
+    bogballe.com/fr) non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(BOGBALLE_MODELES_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(2000)
+        _accept_cookies(page)
+    except Exception as e:
+        log.warning(f"  Bogballe inaccessible : {e}")
+        return machines
+
+    product_links = _bogballe_product_links(page)
+    log.info(f"  Bogballe → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            _accept_cookies(page)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        segments = [s for s in urlparse(url).path.split("/") if s]
+        name = segments[-1].upper().replace("-", " ") if segments else ""
+        if not name or len(name) < 2:
+            continue
+
+        text = page.inner_text("body")
+        idx = text.find(name)
+        specs = _bogballe_specs(text[idx:] if idx != -1 else text)
+        if not specs:
+            continue
+
+        key = f"Bogballe|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Bogballe"
+        m.name = name
+        m.category = normaliser_categorie("épandeurs d'engrais", name)
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Bogballe → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -3566,6 +3670,7 @@ def run() -> int:
             ("Berthoud (berthoud.com)", scrape_berthoud),
             ("Ropa (ropa-maschinenbau.de)", scrape_ropa),
             ("Samson (samson-agro.com)", scrape_samson),
+            ("Bogballe (bogballe.com)", scrape_bogballe),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
