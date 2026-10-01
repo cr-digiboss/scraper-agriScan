@@ -1,9 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 6 round 1 :
-- Bogballe : re-sondage du site (épandeurs) pour revoir la structure des
-  fiches modèle et la pagination texte des specs
-- Rauch : vérifier si une version FR est désormais accessible
+Lot 6 round 2 :
+- Bogballe : dump de la page "modeles/" (hub des épandeurs, à distinguer
+  des "unites-de-controle" qui sont des boîtiers électroniques, pas des
+  machines — probable cause du bug de parsing précédent) + inspection d'une
+  fiche modèle réelle
+- Rauch : vérifier la page "land-waehlen" (sélecteur de pays) pour voir si
+  un domaine FR dédié existe
 """
 
 import logging
@@ -21,6 +24,7 @@ UA = (
 
 COOKIE_TEXTS = [
     "Tout accepter", "Accepter tout", "Accept all", "J'accepte", "Accepter",
+    "Alle akzeptieren",
 ]
 
 
@@ -64,7 +68,7 @@ def inspect(page, url, label):
         tables = page.query_selector_all("table")
         log.info(f"    {len(tables)} table(s)")
         text = page.inner_text("body")
-        log.info(f"    body text (900 car.) : {text[:900]!r}")
+        log.info(f"    body text ({len(text)} car. ; 1500 affichés) : {text[:1500]!r}")
     except Exception as e:
         log.warning(f"  {label} : échec ({e})")
 
@@ -74,15 +78,15 @@ def main():
         browser = p.chromium.launch()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.bogballe.com/fr/", "Bogballe home FR")
+        dump_links(page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/", "Bogballe modeles (hub)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.rauch.de/fr/", "Rauch /fr/")
+        inspect(page, "https://www.bogballe.com/fr/epandeurs-dengrais/modeles/m60w-plus/", "Bogballe M60W+ (fiche)")
         page.close()
 
         page = browser.new_page(user_agent=UA)
-        dump_links(page, "https://www.rauch.de/", "Rauch home (racine)")
+        dump_links(page, "https://rauch.de/land-waehlen.html", "Rauch sélecteur de pays")
         page.close()
 
         browser.close()
