@@ -3567,7 +3567,11 @@ def scrape_bogballe(page: Page, existing_keys: set) -> list[Machine]:
 
         text = page.inner_text("body")
         idx = text.find(name)
-        specs = _bogballe_specs(text[idx:] if idx != -1 else text)
+        spec_text = text[idx:] if idx != -1 else text
+        footer_idx = spec_text.find("Liste des pièces de rechange")
+        if footer_idx != -1:
+            spec_text = spec_text[:footer_idx]
+        specs = _bogballe_specs(spec_text)
         if not specs:
             continue
 
