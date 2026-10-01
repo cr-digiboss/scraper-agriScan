@@ -2734,8 +2734,118 @@ def _franquet_product_links(page: Page, base_path: str) -> set:
     return links
 
 
+def _franquet_table_grid(table) -> list:
+    """Construit une grille 2D en développant les cellules fusionnées
+    (colspan/rowspan). Les tableaux de gamme FRANQUET comparent plusieurs
+    variantes d'un même produit (largeur, type de bâti...) avec des cellules
+    fusionnées qui désalignent un simple comptage "une ligne = une liste de
+    cellules" ; lire colSpan/rowSpan directement dans le DOM via JS est le
+    seul moyen fiable de retrouver le bon alignement de colonnes."""
+    return table.evaluate(
+        """
+        (table) => {
+            const rows = Array.from(table.querySelectorAll('tr'));
+            const grid = [];
+            rows.forEach((row, rIdx) => {
+                const cells = Array.from(row.querySelectorAll('td, th'));
+                if (!grid[rIdx]) grid[rIdx] = [];
+                let colIdx = 0;
+                cells.forEach(cell => {
+                    while (grid[rIdx][colIdx] !== undefined) colIdx++;
+                    const colspan = cell.colSpan || 1;
+                    const rowspan = cell.rowSpan || 1;
+                    const text = cell.innerText.trim();
+                    for (let r = 0; r < rowspan; r++) {
+                        if (!grid[rIdx + r]) grid[rIdx + r] = [];
+                        for (let c = 0; c < colspan; c++) {
+                            grid[rIdx + r][colIdx + c] = text;
+                        }
+                    }
+                    colIdx += colspan;
+                });
+            });
+            return grid;
+        }
+        """
+    )
+
+
+def _franquet_is_titre(texte: str) -> bool:
+    """Un intitulé de produit FRANQUET est toujours tout en majuscules
+    (ex. 'BINEUSE BETTERAVES', 'BISYNCHRO TF'), ce qui le distingue des
+    lignes d'en-tête de variante (largeurs, types...) et des lignes
+    d'attribut (casse normale)."""
+    return bool(texte) and texte == texte.upper() and texte != texte.lower()
+
+
+def _franquet_machines_from_table(table, brand: str, category: str, source_url: str) -> list[Machine]:
+    """Un tableau de gamme FRANQUET compare les variantes (largeur, type de
+    bâti...) d'UN SEUL produit, dont le nom est dans la première ligne tout
+    en majuscules rencontrée en partant du haut ; les lignes au-dessus sont
+    des en-têtes de variante par colonne, celles en-dessous des attributs
+    techniques. Une colonne = une variante = une Machine (le nom du produit
+    partagé, la variante distinguant largeur/type)."""
+    grid = _franquet_table_grid(table)
+    if not grid:
+        return []
+
+    name_row_idx = None
+    for i, row in enumerate(grid):
+        cell0 = clean(row[0]) if row and row[0] else ""
+        if cell0 and _franquet_is_titre(cell0):
+            name_row_idx = i
+            break
+    if name_row_idx is None:
+        return []
+
+    name = clean(grid[name_row_idx][0])
+    if name.upper().startswith("OPTION"):
+        return []  # tableaux d'accessoires/options, pas des fiches machine
+
+    n_cols = max(len(r) for r in grid)
+
+    variant_labels = {}
+    for j in range(1, n_cols):
+        parts = []
+        for i in range(name_row_idx + 1):
+            row = grid[i]
+            v = clean(row[j]) if j < len(row) and row[j] else ""
+            if v and v not in parts:
+                parts.append(v)
+        variant_labels[j] = " ".join(parts)
+
+    specs_per_col: dict = {}
+    for row in grid[name_row_idx + 1:]:
+        if not row:
+            continue
+        attr_name = clean(row[0]) if row[0] else ""
+        if not attr_name:
+            continue
+        for j in range(1, len(row)):
+            val = clean(row[j]) if row[j] else ""
+            if val:
+                specs_per_col.setdefault(j, {})[attr_name] = val
+
+    machines = []
+    for j, specs in specs_per_col.items():
+        if not specs:
+            continue
+        m = Machine()
+        m.brand = brand
+        m.name = name
+        m.variant = variant_labels.get(j, "")
+        m.category = category
+        m.sourceUrl = source_url
+        m.statut = "active"
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        machines.append(m)
+    return machines
+
+
 def scrape_franquet(page: Page, existing_keys: set) -> list[Machine]:
-    """Scrape les fiches modèles Franquet non encore présentes dans Neon."""
+    """Scrape les fiches modèles Franquet non encore présentes dans Neon.
+    Les pages de sous-catégorie contiennent plusieurs tableaux de gamme
+    (un par produit), chacun comparant les variantes de ce produit."""
     machines = []
 
     for category_url in FRANQUET_CATEGORIES:
@@ -2768,16 +2878,14 @@ def scrape_franquet(page: Page, existing_keys: set) -> list[Machine]:
             if not tables:
                 continue
 
-            range_name = clean(page.title()).split("-")[0].strip()
-
             for table in tables:
-                for candidats in _machines_from_wide_table(table, "Franquet", category, range_name, url):
+                for candidats in _franquet_machines_from_table(table, "Franquet", category, url):
                     key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
                     if key in existing_keys:
                         continue
                     machines.append(candidats)
                     existing_keys.add(key)
-                    log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+                    log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name} ({candidats.variant})")
 
             time.sleep(random.uniform(1.0, 2.0))
 
