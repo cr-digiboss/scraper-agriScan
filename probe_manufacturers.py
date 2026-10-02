@@ -1,11 +1,14 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 3 : round 2 a échoué car la bannière cookies
-OneTrust intercepte le clic (0 clic effectué). On la ferme d'abord, puis
-on clique sur "VOIR PLUS DE MODÈLES" (répéter jusqu'à disparition) et on
-vérifie que le tableau de specs s'enrichit de colonnes supplémentaires.
+Debug New Holland round 4 : round 3 a confirmé que cliquer sur
+"VOIR PLUS DE MODÈLES" ne fait PAS grossir le <table> de specs (resté à
+7 colonnes/22 rows avant/après). Le tableau est donc découplé de la
+galerie de cartes "MODÈLES". On inspecte ici la structure de cette
+galerie (cartes avant/après clic, liens éventuels) pour savoir où se
+trouvent les données des modèles manquants.
 """
 
+import json
 import logging
 
 from playwright.sync_api import sync_playwright
@@ -32,24 +35,32 @@ def main():
             accept = page.locator("#onetrust-accept-btn-handler")
             if accept.is_visible(timeout=3000):
                 accept.click(timeout=3000)
-                log.info("bannière cookies fermée via #onetrust-accept-btn-handler")
                 page.wait_for_timeout(1000)
-        except Exception as e:
-            log.info(f"pas de bannière cookies (ou échec fermeture) : {e}")
+        except Exception:
+            pass
 
-        def table_header():
-            tables = page.query_selector_all("table")
-            if not tables:
-                return None, 0
-            rows = tables[0].query_selector_all("tr")
-            if not rows:
-                return None, 0
-            cells = rows[0].query_selector_all("td, th")
-            return [c.inner_text().strip()[:25] for c in cells], len(rows)
+        def describe_cards():
+            return page.evaluate(
+                """
+                () => {
+                    const root = document.querySelector('[class*="model-listing"]');
+                    if (!root) return {found: false};
+                    const items = Array.from(
+                        root.querySelectorAll('[class*="model-listing__item"], [class*="model-listing__card"]')
+                    );
+                    const sample = items.slice(0, 20).map(it => ({
+                        tag: it.tagName,
+                        cls: it.className,
+                        text: it.innerText.trim().slice(0, 60),
+                        href: it.querySelector('a') ? it.querySelector('a').href : (it.tagName === 'A' ? it.href : null),
+                    }));
+                    return {found: true, count: items.length, sample, rootClass: root.className};
+                }
+                """
+            )
 
-        header, nrows = table_header()
-        log.info(f"AVANT clic : {len(header) if header else 0} colonnes, {nrows} rows")
-        log.info(f"  header : {header}")
+        before = describe_cards()
+        log.info(f"AVANT clic -- cartes: {json.dumps(before, ensure_ascii=False, indent=2)}")
 
         clicks = 0
         for _ in range(10):
@@ -65,10 +76,25 @@ def main():
                 log.info(f"  arrêt clic : {e}")
                 break
 
-        log.info(f"\nclics 'VOIR PLUS DE MODÈLES' effectués : {clicks}")
-        header, nrows = table_header()
-        log.info(f"APRÈS clic(s) : {len(header) if header else 0} colonnes, {nrows} rows")
-        log.info(f"  header : {header}")
+        log.info(f"\nclics effectués : {clicks}")
+        after = describe_cards()
+        log.info(f"APRES clic(s) -- cartes: {json.dumps(after, ensure_ascii=False, indent=2)}")
+
+        # Les tables de specs ont-elles un attribut identifiant le modèle (ancre, data-*) ?
+        tables_info = page.evaluate(
+            """
+            () => {
+                const tables = Array.from(document.querySelectorAll('table'));
+                return tables.map((t, i) => ({
+                    index: i,
+                    id: t.id || null,
+                    cls: t.className || null,
+                    parentCls: t.parentElement ? t.parentElement.className : null,
+                }));
+            }
+            """
+        )
+        log.info(f"\ntables sur la page : {json.dumps(tables_info, ensure_ascii=False, indent=2)}")
 
         browser.close()
 
