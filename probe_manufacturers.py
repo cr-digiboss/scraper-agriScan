@@ -1,12 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 2 : chercher des onglets/filtres de série (pas un
-bouton "voir plus" classique) qui limiteraient les modèles affichés, et
-dumper le texte complet de la page tracteurs pour comprendre la structure.
+Debug New Holland round 3 : inspecter une fiche produit individuelle
+(ex. T7 Standard) pour voir si un bouton "voir plus de modèles" y révèle
+des variantes/modèles non capturés par le tableau de specs actuel.
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -19,49 +18,41 @@ UA = (
 )
 
 
-def links_for(page, base_path):
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = set()
-    for href in hrefs:
-        u = urlparse(href)
-        if "newholland.com" not in u.netloc:
-            continue
-        if u.path.startswith(base_path) and u.path != base_path and u.path.rstrip("/") != base_path.rstrip("/"):
-            links.add(href.split("?")[0].split("#")[0])
-    return links
+def inspect(page, url, label):
+    try:
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+        log.info(f"\n--- {label} : {url} title={page.title()!r}")
+        tables = page.query_selector_all("table")
+        log.info(f"    {len(tables)} table(s)")
 
+        candidates = page.eval_on_selector_all(
+            "button, a, div[role='button'], span[role='button']",
+            "els => els.filter(e => /mod[eè]le|voir plus|afficher plus|view more|show more/i.test(e.textContent)).map(e => e.tagName + ':' + e.textContent.trim().slice(0,60))"
+        )
+        log.info(f"    éléments mentionnant 'modèle'/'voir plus' : {candidates[:20]}")
 
-def inspect(page, url):
-    page.goto(url, timeout=30000, wait_until="domcontentloaded")
-    page.wait_for_timeout(4000)
-    base_path = urlparse(url).path
-
-    log.info(f"\n=== {url}")
-    log.info(f"  liens produits trouvés : {len(links_for(page, base_path))}")
-
-    # chercher des onglets / filtres (role=tab, boutons de filtre série)
-    tabs = page.eval_on_selector_all(
-        "[role='tab'], [role='tablist'] *, .tab, .filter, [class*='tab'], [class*='filter']",
-        "els => els.slice(0,40).map(e => e.tagName + ':' + (e.getAttribute('role')||'') + ':' + e.textContent.trim().slice(0,40))"
-    )
-    log.info(f"  éléments tab/filter (40 max) : {tabs}")
-
-    # dump texte complet de la zone produits (pour voir s'il y a un compteur
-    # "X sur Y modèles" ou des noms de séries non listés dans les liens)
-    text = page.inner_text("body")
-    log.info(f"  body text ({len(text)} car. ; 2000 affichés) : {text[:2000]!r}")
+        text = page.inner_text("body")
+        log.info(f"    body text ({len(text)} car. ; 2500 affichés) : {text[:2500]!r}")
+    except Exception as e:
+        log.warning(f"  {label} : échec ({e})")
 
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://agriculture.newholland.com/fr-be/europe/produits/tracteurs")
+        inspect(page, "https://agriculture.newholland.com/fr-be/europe/produits/tracteurs", "Tracteurs (recherche lien T7 STANDARD)")
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        t7_links = [h for h in hrefs if "t7" in h.lower() and "newholland.com" in h]
+        log.info(f"\nLiens T7 trouvés : {t7_links[:10]}")
         page.close()
 
-        page = browser.new_page(user_agent=UA)
-        inspect(page, "https://agriculture.newholland.com/fr-be/europe/produits/ensileuses")
-        page.close()
+        if t7_links:
+            page = browser.new_page(user_agent=UA)
+            inspect(page, t7_links[0], "Fiche T7")
+            page.close()
+
         browser.close()
 
 
