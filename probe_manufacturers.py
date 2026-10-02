@@ -1,8 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 2 : cliquer sur "VOIR PLUS DE MODÈLES" (répéter
-jusqu'à disparition) et vérifier que le tableau de specs s'enrichit de
-colonnes supplémentaires.
+Debug New Holland round 3 : round 2 a échoué car la bannière cookies
+OneTrust intercepte le clic (0 clic effectué). On la ferme d'abord, puis
+on clique sur "VOIR PLUS DE MODÈLES" (répéter jusqu'à disparition) et on
+vérifie que le tableau de specs s'enrichit de colonnes supplémentaires.
 """
 
 import logging
@@ -26,6 +27,15 @@ def main():
         page = browser.new_page(user_agent=UA)
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
+
+        try:
+            accept = page.locator("#onetrust-accept-btn-handler")
+            if accept.is_visible(timeout=3000):
+                accept.click(timeout=3000)
+                log.info("bannière cookies fermée via #onetrust-accept-btn-handler")
+                page.wait_for_timeout(1000)
+        except Exception as e:
+            log.info(f"pas de bannière cookies (ou échec fermeture) : {e}")
 
         def table_header():
             tables = page.query_selector_all("table")
