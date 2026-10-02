@@ -840,10 +840,72 @@ def _wait_for_new_holland_links(page: Page, base_path: str, max_wait_ms: int = 1
     return links
 
 
+def _dismiss_new_holland_cookies(page: Page) -> None:
+    """La bannière cookies OneTrust intercepte les clics (ex. "voir plus de
+    modèles") si elle n'est pas fermée au préalable."""
+    try:
+        accept = page.locator("#onetrust-accept-btn-handler")
+        if accept.is_visible(timeout=3000):
+            accept.click(timeout=3000)
+            page.wait_for_timeout(1000)
+    except Exception:
+        pass
+
+
+def _new_holland_reveal_all_models(page: Page) -> None:
+    """Certaines fiches famille (ex. barres de coupe Varifeed) cachent une
+    partie des modèles derrière un bouton "VOIR PLUS DE MODÈLES" : la
+    galerie de cartes grossit au clic mais le <table> de specs techniques,
+    lui, ne bouge jamais (vérifié : les codes des modèles révélés
+    n'existent nulle part dans son DOM, même après clic)."""
+    for _ in range(10):
+        try:
+            btn = page.get_by_text("VOIR PLUS DE MODÈLES", exact=False).first
+            if not btn.is_visible(timeout=1000):
+                break
+            btn.scroll_into_view_if_needed(timeout=2000)
+            btn.click(timeout=2000)
+            page.wait_for_timeout(1200)
+        except Exception:
+            break
+
+
+def _new_holland_models_from_cards(page: Page) -> dict:
+    """Specs minimales (nom + caractéristiques affichées) extraites
+    directement de la galerie de cartes "MODÈLES" : seule source pour les
+    modèles absents du <table> technique (le tableau n'a pas toujours été
+    mis à jour avec les modèles ajoutés depuis à la gamme)."""
+    return page.evaluate(
+        """
+        () => {
+            const cards = Array.from(document.querySelectorAll('.model-listing__card'));
+            const result = {};
+            cards.forEach(card => {
+                const titleEl = card.querySelector('.model-listing-card__title');
+                if (!titleEl) return;
+                const name = titleEl.innerText.trim();
+                if (!name) return;
+                const specs = {};
+                card.querySelectorAll('.model-listing-card__spec-text').forEach(label => {
+                    const value = label.nextElementSibling;
+                    if (!value || !value.classList.contains('model-listing-card__spec-value')) return;
+                    const l = label.innerText.trim();
+                    const v = value.innerText.trim();
+                    if (l && v) specs[l] = v;
+                });
+                result[name] = specs;
+            });
+            return result;
+        }
+        """
+    )
+
+
 def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
     """Scrape les fiches modèles New Holland (tracteurs, presses, moissonneuses,
     ensileuses) non encore présentes dans Neon."""
     machines = []
+    cookies_dismissed = False
 
     for category_url in NEW_HOLLAND_CATEGORIES:
         base_path = urlparse(category_url).path
@@ -855,6 +917,10 @@ def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
         except Exception as e:
             log.warning(f"  New Holland ({category_slug}) inaccessible : {e}")
             continue
+
+        if not cookies_dismissed:
+            _dismiss_new_holland_cookies(page)
+            cookies_dismissed = True
 
         product_links = _wait_for_new_holland_links(page, base_path)
         log.info(f"  New Holland ({category_slug}) → {len(product_links)} fiches modèles trouvées")
@@ -868,13 +934,36 @@ def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
                 log.warning(f"    Erreur {url} → {e}")
                 continue
 
-            tables = page.query_selector_all("table")
-            if not tables:
-                continue
+            _new_holland_reveal_all_models(page)
 
             range_name = clean(page.title()).split("|")[0].strip()
 
-            for candidats in _machines_from_wide_table(tables[0], "New Holland", category, range_name, url):
+            tables = page.query_selector_all("table")
+            table_machines = (
+                _machines_from_wide_table(tables[0], "New Holland", category, range_name, url)
+                if tables
+                else []
+            )
+            table_names = {m.name for m in table_machines}
+
+            candidats_list = list(table_machines)
+            for name, specs in _new_holland_models_from_cards(page).items():
+                if name in table_names or not specs or len(name) < 2:
+                    continue
+                m = Machine()
+                m.brand = "New Holland"
+                m.range = range_name
+                m.name = name
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                candidats_list.append(m)
+
+            if not candidats_list:
+                continue
+
+            for candidats in candidats_list:
                 key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
                 if key in existing_keys:
                     continue
