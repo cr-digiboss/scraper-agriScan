@@ -1,0 +1,21 @@
+name: Nettoyage ponctuel (temporaire)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+
+      - run: python check_tractordata_count.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
