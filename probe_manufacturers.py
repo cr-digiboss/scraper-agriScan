@@ -1,11 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 4 : round 3 a confirmé que cliquer sur
-"VOIR PLUS DE MODÈLES" ne fait PAS grossir le <table> de specs (resté à
-7 colonnes/22 rows avant/après). Le tableau est donc découplé de la
-galerie de cartes "MODÈLES". On inspecte ici la structure de cette
-galerie (cartes avant/après clic, liens éventuels) pour savoir où se
-trouvent les données des modèles manquants.
+Debug New Holland round 5 : la galerie de cartes "MODÈLES" contient 9
+modèles (7616..7641) mais le <table> de specs n'a que 6 colonnes
+(7616..7628), même après clic sur "VOIR PLUS DE MODÈLES" (qui ne fait
+que révéler des cartes supplémentaires, sans toucher au tableau). On
+vérifie ici si les codes des 3 modèles manquants (7630, 7635, 7641)
+existent QUAND MÊME ailleurs dans le DOM du tableau (texte caché, lignes
+d'en-tête supplémentaires, etc.) avant de conclure que la donnée est
+simplement absente du tableau sur le site source.
 """
 
 import json
@@ -23,6 +25,8 @@ UA = (
 
 URL = "https://agriculture.newholland.com/fr-be/europe/produits/moissonneuses-batteuses/barres-de-coupe-varifeed-pour-moissonneuses-batteuses"
 
+MISSING_CODES = ["7630", "7635", "7641"]
+
 
 def main():
     with sync_playwright() as p:
@@ -39,62 +43,71 @@ def main():
         except Exception:
             pass
 
-        def describe_cards():
-            return page.evaluate(
-                """
-                () => {
-                    const root = document.querySelector('[class*="model-listing"]');
-                    if (!root) return {found: false};
-                    const items = Array.from(
-                        root.querySelectorAll('[class*="model-listing__item"], [class*="model-listing__card"]')
-                    );
-                    const sample = items.slice(0, 20).map(it => ({
-                        tag: it.tagName,
-                        cls: it.className,
-                        text: it.innerText.trim().slice(0, 60),
-                        href: it.querySelector('a') ? it.querySelector('a').href : (it.tagName === 'A' ? it.href : null),
-                    }));
-                    return {found: true, count: items.length, sample, rootClass: root.className};
-                }
-                """
-            )
+        # 1) Les codes manquants apparaissent-ils n'importe où dans le <table> ?
+        search_result = page.evaluate(
+            """
+            (codes) => {
+                const table = document.querySelector('table');
+                if (!table) return {found: false};
+                const fullText = table.innerText;
+                const fullHTML = table.innerHTML;
+                return {
+                    found: true,
+                    textLen: fullText.length,
+                    presentInText: codes.map(c => ({code: c, inText: fullText.includes(c), inHTML: fullHTML.includes(c)})),
+                    nRows: table.querySelectorAll('tr').length,
+                };
+            }
+            """,
+            MISSING_CODES,
+        )
+        log.info(f"Recherche codes manquants dans <table> : {json.dumps(search_result, ensure_ascii=False, indent=2)}")
 
-        before = describe_cards()
-        log.info(f"AVANT clic -- cartes: {json.dumps(before, ensure_ascii=False, indent=2)}")
-
-        clicks = 0
-        for _ in range(10):
-            try:
-                btn = page.get_by_text("VOIR PLUS DE MODÈLES", exact=False).first
-                if not btn.is_visible(timeout=1500):
-                    break
-                btn.scroll_into_view_if_needed(timeout=2000)
-                btn.click(timeout=2000)
-                clicks += 1
-                page.wait_for_timeout(1500)
-            except Exception as e:
-                log.info(f"  arrêt clic : {e}")
-                break
-
-        log.info(f"\nclics effectués : {clicks}")
-        after = describe_cards()
-        log.info(f"APRES clic(s) -- cartes: {json.dumps(after, ensure_ascii=False, indent=2)}")
-
-        # Les tables de specs ont-elles un attribut identifiant le modèle (ancre, data-*) ?
-        tables_info = page.evaluate(
+        # 2) Grille complète (colspan/rowspan-aware) du tableau, pour inspection humaine.
+        grid = page.evaluate(
             """
             () => {
-                const tables = Array.from(document.querySelectorAll('table'));
-                return tables.map((t, i) => ({
-                    index: i,
-                    id: t.id || null,
-                    cls: t.className || null,
-                    parentCls: t.parentElement ? t.parentElement.className : null,
+                const table = document.querySelector('table');
+                if (!table) return null;
+                const rows = Array.from(table.querySelectorAll('tr'));
+                const grid = [];
+                rows.forEach((row, rIdx) => {
+                    const cells = Array.from(row.querySelectorAll('td, th'));
+                    if (!grid[rIdx]) grid[rIdx] = [];
+                    let colIdx = 0;
+                    cells.forEach(cell => {
+                        while (grid[rIdx][colIdx] !== undefined) colIdx++;
+                        const colspan = cell.colSpan || 1;
+                        const rowspan = cell.rowSpan || 1;
+                        const text = cell.innerText.trim();
+                        for (let r = 0; r < rowspan; r++) {
+                            if (!grid[rIdx + r]) grid[rIdx + r] = [];
+                            for (let c = 0; c < colspan; c++) {
+                                grid[rIdx + r][colIdx + c] = text;
+                            }
+                        }
+                        colIdx += colspan;
+                    });
+                });
+                return grid.slice(0, 3);
+            }
+            """
+        )
+        log.info(f"\n3 premières lignes de la grille du tableau : {json.dumps(grid, ensure_ascii=False, indent=2)}")
+
+        # 3) Est-ce qu'il y a un élément parent/sibling avec data-* liant cartes <-> colonnes ?
+        card_attrs = page.evaluate(
+            """
+            () => {
+                const cards = Array.from(document.querySelectorAll('.model-listing__card'));
+                return cards.map(c => ({
+                    text60: c.innerText.trim().slice(0, 30),
+                    attrs: Array.from(c.attributes).map(a => `${a.name}=${a.value}`),
                 }));
             }
             """
         )
-        log.info(f"\ntables sur la page : {json.dumps(tables_info, ensure_ascii=False, indent=2)}")
+        log.info(f"\nAttributs des cartes : {json.dumps(card_attrs, ensure_ascii=False, indent=2)}")
 
         browser.close()
 
