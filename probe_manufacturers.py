@@ -1,8 +1,7 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 3 : inspecter une fiche produit individuelle
-(ex. T7 Standard) pour voir si un bouton "voir plus de modèles" y révèle
-des variantes/modèles non capturés par le tableau de specs actuel.
+Debug New Holland round 4 : inspecter la section "MODÈLES" + le tableau de
+specs détaillé (après clic "TOUT DÉVELOPPER") sur une fiche famille T7 XD.
 """
 
 import logging
@@ -17,41 +16,58 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-
-def inspect(page, url, label):
-    try:
-        page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        log.info(f"\n--- {label} : {url} title={page.title()!r}")
-        tables = page.query_selector_all("table")
-        log.info(f"    {len(tables)} table(s)")
-
-        candidates = page.eval_on_selector_all(
-            "button, a, div[role='button'], span[role='button']",
-            "els => els.filter(e => /mod[eè]le|voir plus|afficher plus|view more|show more/i.test(e.textContent)).map(e => e.tagName + ':' + e.textContent.trim().slice(0,60))"
-        )
-        log.info(f"    éléments mentionnant 'modèle'/'voir plus' : {candidates[:20]}")
-
-        text = page.inner_text("body")
-        log.info(f"    body text ({len(text)} car. ; 2500 affichés) : {text[:2500]!r}")
-    except Exception as e:
-        log.warning(f"  {label} : échec ({e})")
+URL = "https://agriculture.newholland.com/fr-be/europe/produits/tracteurs/t7-xd"
 
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
-        inspect(page, "https://agriculture.newholland.com/fr-be/europe/produits/tracteurs", "Tracteurs (recherche lien T7 STANDARD)")
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        t7_links = [h for h in hrefs if "t7" in h.lower() and "newholland.com" in h]
-        log.info(f"\nLiens T7 trouvés : {t7_links[:10]}")
-        page.close()
+        page.goto(URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
 
-        if t7_links:
-            page = browser.new_page(user_agent=UA)
-            inspect(page, t7_links[0], "Fiche T7")
-            page.close()
+        log.info(f"title={page.title()!r}")
+        tables_before = page.query_selector_all("table")
+        log.info(f"tables avant clic : {len(tables_before)}")
+        for i, t in enumerate(tables_before):
+            rows = t.query_selector_all("tr")
+            log.info(f"  table {i}: {len(rows)} rows")
+            for r in rows[:5]:
+                cells = r.query_selector_all("td, th")
+                log.info(f"    row: {[c.inner_text().strip()[:30] for c in cells]}")
+
+        # chercher le bouton "TOUT DÉVELOPPER"
+        try:
+            btn = page.get_by_text("TOUT DÉVELOPPER", exact=False).first
+            log.info(f"bouton 'TOUT DÉVELOPPER' visible : {btn.is_visible(timeout=2000)}")
+            btn.click(timeout=3000)
+            page.wait_for_timeout(2000)
+        except Exception as e:
+            log.warning(f"clic TOUT DÉVELOPPER échoué : {e}")
+
+        tables_after = page.query_selector_all("table")
+        log.info(f"\ntables après clic : {len(tables_after)}")
+        for i, t in enumerate(tables_after):
+            rows = t.query_selector_all("tr")
+            log.info(f"  table {i}: {len(rows)} rows")
+            for r in rows[:10]:
+                cells = r.query_selector_all("td, th")
+                log.info(f"    row: {[c.inner_text().strip()[:30] for c in cells]}")
+
+        # dump de la zone MODÈLES spécifiquement (div/section contenant "MODÈLES")
+        modeles_html = page.evaluate("""
+            () => {
+                const all = Array.from(document.querySelectorAll('div, section'));
+                for (const el of all) {
+                    const t = el.textContent || '';
+                    if (t.includes('T7.360 XD') && t.includes('T7.390 XD') && t.length < 3000) {
+                        return {tag: el.tagName, cls: el.className, html: el.outerHTML.slice(0, 2000)};
+                    }
+                }
+                return null;
+            }
+        """)
+        log.info(f"\nzone MODÈLES (candidat le plus petit) : {modeles_html}")
 
         browser.close()
 
