@@ -1,13 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland round 5 : la galerie de cartes "MODÈLES" contient 9
-modèles (7616..7641) mais le <table> de specs n'a que 6 colonnes
-(7616..7628), même après clic sur "VOIR PLUS DE MODÈLES" (qui ne fait
-que révéler des cartes supplémentaires, sans toucher au tableau). On
-vérifie ici si les codes des 3 modèles manquants (7630, 7635, 7641)
-existent QUAND MÊME ailleurs dans le DOM du tableau (texte caché, lignes
-d'en-tête supplémentaires, etc.) avant de conclure que la donnée est
-simplement absente du tableau sur le site source.
+Debug New Holland round 6 : confirmé (round 5) que les codes 7630/7635/
+7641 sont absents du <table> (texte ET HTML). On inspecte le texte
+INTEGRAL (non tronqué) d'une carte de la galerie "MODÈLES" pour savoir
+si elle contient d'autres données structurées exploitables (ex. largeur
+en m) en plus du nom, et comment en extraire proprement la largeur.
 """
 
 import json
@@ -25,8 +22,6 @@ UA = (
 
 URL = "https://agriculture.newholland.com/fr-be/europe/produits/moissonneuses-batteuses/barres-de-coupe-varifeed-pour-moissonneuses-batteuses"
 
-MISSING_CODES = ["7630", "7635", "7641"]
-
 
 def main():
     with sync_playwright() as p:
@@ -43,71 +38,38 @@ def main():
         except Exception:
             pass
 
-        # 1) Les codes manquants apparaissent-ils n'importe où dans le <table> ?
-        search_result = page.evaluate(
-            """
-            (codes) => {
-                const table = document.querySelector('table');
-                if (!table) return {found: false};
-                const fullText = table.innerText;
-                const fullHTML = table.innerHTML;
-                return {
-                    found: true,
-                    textLen: fullText.length,
-                    presentInText: codes.map(c => ({code: c, inText: fullText.includes(c), inHTML: fullHTML.includes(c)})),
-                    nRows: table.querySelectorAll('tr').length,
-                };
-            }
-            """,
-            MISSING_CODES,
-        )
-        log.info(f"Recherche codes manquants dans <table> : {json.dumps(search_result, ensure_ascii=False, indent=2)}")
+        clicks = 0
+        for _ in range(10):
+            try:
+                btn = page.get_by_text("VOIR PLUS DE MODÈLES", exact=False).first
+                if not btn.is_visible(timeout=1500):
+                    break
+                btn.scroll_into_view_if_needed(timeout=2000)
+                btn.click(timeout=2000)
+                clicks += 1
+                page.wait_for_timeout(1500)
+            except Exception:
+                break
+        log.info(f"clics effectués : {clicks}")
 
-        # 2) Grille complète (colspan/rowspan-aware) du tableau, pour inspection humaine.
-        grid = page.evaluate(
-            """
-            () => {
-                const table = document.querySelector('table');
-                if (!table) return null;
-                const rows = Array.from(table.querySelectorAll('tr'));
-                const grid = [];
-                rows.forEach((row, rIdx) => {
-                    const cells = Array.from(row.querySelectorAll('td, th'));
-                    if (!grid[rIdx]) grid[rIdx] = [];
-                    let colIdx = 0;
-                    cells.forEach(cell => {
-                        while (grid[rIdx][colIdx] !== undefined) colIdx++;
-                        const colspan = cell.colSpan || 1;
-                        const rowspan = cell.rowSpan || 1;
-                        const text = cell.innerText.trim();
-                        for (let r = 0; r < rowspan; r++) {
-                            if (!grid[rIdx + r]) grid[rIdx + r] = [];
-                            for (let c = 0; c < colspan; c++) {
-                                grid[rIdx + r][colIdx + c] = text;
-                            }
-                        }
-                        colIdx += colspan;
-                    });
-                });
-                return grid.slice(0, 3);
-            }
-            """
-        )
-        log.info(f"\n3 premières lignes de la grille du tableau : {json.dumps(grid, ensure_ascii=False, indent=2)}")
-
-        # 3) Est-ce qu'il y a un élément parent/sibling avec data-* liant cartes <-> colonnes ?
-        card_attrs = page.evaluate(
+        cards_full = page.evaluate(
             """
             () => {
                 const cards = Array.from(document.querySelectorAll('.model-listing__card'));
                 return cards.map(c => ({
-                    text60: c.innerText.trim().slice(0, 30),
-                    attrs: Array.from(c.attributes).map(a => `${a.name}=${a.value}`),
+                    fullText: c.innerText,
+                    html: c.innerHTML.slice(0, 1500),
                 }));
             }
             """
         )
-        log.info(f"\nAttributs des cartes : {json.dumps(card_attrs, ensure_ascii=False, indent=2)}")
+        for i, c in enumerate(cards_full):
+            log.info(f"\n=== Carte {i} ===")
+            log.info(f"texte complet:\n{c['fullText']}")
+
+        log.info("\n\n=== HTML de la première carte (1500 chars) ===")
+        if cards_full:
+            log.info(cards_full[0]["html"])
 
         browser.close()
 
