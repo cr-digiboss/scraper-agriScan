@@ -1,6 +1,6 @@
 """
 AgriScan Scraper — point d'entrée unique
-Récupère les fiches tracteurs sur TractorData.com et met à jour la base Neon.
+Récupère les fiches modèles sur les sites constructeurs et met à jour la base Neon.
 
 Usage :
     python scraper.py
@@ -13,7 +13,6 @@ import time
 import random
 import logging
 from dataclasses import dataclass
-from datetime import date
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -28,30 +27,6 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("agriscan")
-
-BASE = "https://www.tractordata.com"
-
-# Marques scrapées → page listant tous les modèles de la marque.
-# Pour ajouter une marque : trouver sa page "tractor-brands" sur tractordata.com et l'ajouter ici.
-MARQUES = {
-    "John Deere":      f"{BASE}/farm-tractors/tractor-brands/johndeere/johndeere-tractors.html",
-    "Massey Ferguson": f"{BASE}/farm-tractors/tractor-brands/massey-ferguson/massey-ferguson-tractors.html",
-    "New Holland":     f"{BASE}/farm-tractors/tractor-brands/newholland/newholland-tractors.html",
-    "Case IH":         f"{BASE}/farm-tractors/tractor-brands/caseih/caseih-tractors.html",
-    "Kubota":          f"{BASE}/farm-tractors/tractor-brands/kubota/kubota-tractors.html",
-    "Ford":            f"{BASE}/farm-tractors/tractor-brands/ford/ford-tractors.html",
-    "Fendt":           f"{BASE}/farm-tractors/tractor-brands/fendt/fendt-tractors.html",
-    "Claas":           f"{BASE}/farm-tractors/tractor-brands/claas/claas-tractors.html",
-    "Deutz-Fahr":      f"{BASE}/farm-tractors/tractor-brands/deutz/deutz-tractors.html",
-    "Allis-Chalmers":  f"{BASE}/farm-tractors/tractor-brands/allischalmers/allischalmers-tractors.html",
-    "International":   f"{BASE}/farm-tractors/tractor-brands/ih/ih-tractors.html",
-    "Fiat":            f"{BASE}/farm-tractors/tractor-brands/fiat/fiat-tractors.html",
-    "Mahindra":        f"{BASE}/farm-tractors/tractor-brands/mahindra/mahindra-tractors.html",
-}
-
-ONGLETS = ["Engine", "Transmission", "Dimensions"]
-ANNEE_ANCETRE = 1980
-ANNEE_VINTAGE = 2000
 
 # Traduction des libellés de specs anglais → français
 SPECS_TRADUCTIONS = {
@@ -169,27 +144,6 @@ class Machine:
 
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
-
-
-def extract_year(text: str) -> str:
-    m = re.search(r"\b(19[0-9]\d|20[012]\d)\b", text)
-    return m.group() if m else ""
-
-
-def parse_production(valeur: str) -> tuple[str, str]:
-    """Extrait une plage d'années depuis le champ "Production" de TractorData
-    (ex. "1985 - 1992", "1965-", "2015 - present"). Retourne (anneeDebut,
-    anneeFin) ; anneeFin vide si la production semble toujours en cours ou
-    si on ne peut pas la déterminer — on ne devine jamais un statut à tort."""
-    if not valeur:
-        return "", ""
-    annees = re.findall(r"\b(19[0-9]\d|20[0-2]\d)\b", valeur)
-    en_cours = bool(re.search(r"present|current|date|aujourd", valeur, re.I))
-    if len(annees) >= 2:
-        return min(annees), max(annees)
-    if len(annees) == 1:
-        return (annees[0], "") if en_cours else (annees[0], annees[0])
-    return "", ""
 
 
 def traduire_specs(specs: dict) -> dict:
@@ -319,133 +273,6 @@ def normaliser_categorie(*textes: str) -> str:
         if mot_cle in combined:
             return categorie
     return "Autre"
-
-
-def _badge(annee: str) -> str:
-    try:
-        a = int(annee[:4]) if annee else 0
-        if a and a < ANNEE_ANCETRE:
-            return "Ancêtre"
-        if a and a < ANNEE_VINTAGE:
-            return "Vintage"
-    except (ValueError, TypeError):
-        pass
-    return ""
-
-
-def _extraire_specs(page: Page) -> dict:
-    """Clique sur chaque onglet de la fiche technique et récupère les tableaux de specs."""
-    specs = {}
-    for onglet in ONGLETS:
-        try:
-            page.click(f"text={onglet}", timeout=3000)
-            time.sleep(1.5)
-            soup = BeautifulSoup(page.content(), "html.parser")
-            for table in soup.find_all("table"):
-                for row in table.find_all("tr"):
-                    cells = row.find_all(["td", "th"])
-                    if len(cells) >= 2:
-                        k = clean(cells[0].get_text())
-                        v = clean(cells[1].get_text())
-                        if k and v and k != "x" and "x" not in k and len(k) > 2:
-                            specs[k] = v
-        except Exception:
-            pass
-    return specs
-
-
-def _extraire_puissance(specs: dict, text: str) -> str:
-    for k, v in specs.items():
-        if any(x in k.lower() for x in ["power", "hp", "pto", "engine"]):
-            m = re.search(r"(\d+\.?\d*)\s*hp", v, re.I)
-            if m:
-                return str(round(float(m.group(1)) * 0.7355))
-    m = re.search(r"(\d+\.?\d*)\s*hp", text, re.I)
-    if m:
-        return str(round(float(m.group(1)) * 0.7355))
-    return ""
-
-
-def scrape_marque(page: Page, marque: str, liste_url: str, existing_keys: set) -> list[Machine]:
-    """Scrape les modèles d'une marque non encore présents dans Neon."""
-    machines = []
-    try:
-        page.goto(liste_url, timeout=60000, wait_until="domcontentloaded")
-        time.sleep(2)
-    except Exception as e:
-        log.warning(f"  {marque} inaccessible : {e}")
-        return machines
-
-    soup_liste = BeautifulSoup(page.content(), "html.parser")
-    model_links = set()
-    for a in soup_liste.find_all("a", href=True):
-        href = a["href"]
-        if not href.startswith("http"):
-            href = BASE + href
-        # Une vraie fiche modèle a toujours un dossier numérique juste après
-        # /farm-tractors/ (ex. /farm-tractors/000/0/3/35-john-deere-50.html).
-        # Sans ça on récupère aussi des pages de navigation comme
-        # /farm-tractors/index.html, scrapées à tort comme un "modèle".
-        if (
-            href.endswith(".html")
-            and "tractor-brands" not in href
-            and re.search(r"/farm-tractors/\d+/", href)
-        ):
-            model_links.add(href)
-
-    log.info(f"  {marque} → {len(model_links)} modèles trouvés sur le site")
-
-    for i, url in enumerate(sorted(model_links), 1):
-        try:
-            page.goto(url, timeout=60000, wait_until="domcontentloaded")
-            time.sleep(random.uniform(1.5, 2.5))
-        except Exception as e:
-            log.warning(f"    Erreur {url} → {e}")
-            continue
-
-        soup_m = BeautifulSoup(page.content(), "html.parser")
-        m = Machine(brand=marque, category="Tracteurs", sourceUrl=url)
-
-        h1 = soup_m.find("h1")
-        if h1:
-            titre = clean(h1.get_text())
-            # Une vraie fiche modèle commence toujours par le nom de la marque
-            # (ex. "Massey Ferguson 165"). Sinon, ce n'est probablement pas
-            # une fiche modèle valide (page de navigation, erreur...).
-            if titre.lower().startswith(marque.lower()):
-                m.name = titre[len(marque):].strip()
-
-        if not m.name or len(m.name) < 2:
-            continue
-
-        page_text = soup_m.get_text()
-        annee = extract_year(page_text)
-
-        key = f"{m.brand}|{m.name}|{m.variant}"
-        if key in existing_keys:
-            continue
-
-        specs = _extraire_specs(page)
-        cv = _extraire_puissance(specs, page_text)
-        badge = _badge(annee)
-
-        m.anneeDebut, m.anneeFin = parse_production(specs.get("Production", ""))
-        if m.anneeFin:
-            m.statut = "discontinued" if int(m.anneeFin) < date.today().year else "active"
-        elif m.anneeDebut:
-            m.statut = "active"
-
-        specs = traduire_specs(specs)
-        specs["puissance_cv"] = cv
-        specs["annee"] = annee
-        specs["badge"] = badge
-        m.specs = json.dumps(specs, ensure_ascii=False)
-
-        machines.append(m)
-        existing_keys.add(key)
-        log.info(f"    [{i}/{len(model_links)}] ✓ {m.name}{f' — {badge}' if badge else ''}")
-
-    return machines
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3750,8 +3577,6 @@ def run() -> int:
             viewport={"width": 1280, "height": 800},
             locale="fr-FR",
         )
-        # Sources légères en premier (catalogue complet en quelques minutes),
-        # TractorData en dernier car son crawl de 12 marques est le plus long.
         for nom_source, scraper_fn in [
             ("Kverneland", scrape_kverneland),
             ("Claas (claas.com)", scrape_claas),
@@ -3798,23 +3623,6 @@ def run() -> int:
                 page.close()
                 continue
             page.close()
-            if machines:
-                ok, err, q_ok, q_err = _upsert_and_index(machines)
-                total_ok += ok
-                total_err += err
-                total_qdrant_ok += q_ok
-                total_qdrant_err += q_err
-                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs), {q_ok} indexées dans Qdrant ({q_err} erreurs)")
-            else:
-                log.info("  → aucune nouvelle machine")
-
-        for marque, liste_url in MARQUES.items():
-            log.info(f"Marque : {marque}")
-            page = context.new_page()
-            try:
-                machines = scrape_marque(page, marque, liste_url, existing_keys)
-            finally:
-                page.close()
             if machines:
                 ok, err, q_ok, q_err = _upsert_and_index(machines)
                 total_ok += ok
