@@ -1,12 +1,11 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Debug New Holland : la page des barres de coupe Varifeed (exemple donné par
-l'utilisateur) pour trouver le vrai bouton "voir plus de modèles" et voir
-si cette page est même atteignable depuis les pages catégorie actuelles.
+Debug New Holland round 2 : cliquer sur "VOIR PLUS DE MODÈLES" (répéter
+jusqu'à disparition) et vérifier que le tableau de specs s'enrichit de
+colonnes supplémentaires.
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -19,45 +18,47 @@ UA = (
 )
 
 URL = "https://agriculture.newholland.com/fr-be/europe/produits/moissonneuses-batteuses/barres-de-coupe-varifeed-pour-moissonneuses-batteuses"
-CATEGORY_URL = "https://agriculture.newholland.com/fr-be/europe/produits/moissonneuses-batteuses"
 
 
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
-
-        # 1) Cette page est-elle liée depuis la page catégorie ?
-        page = browser.new_page(user_agent=UA)
-        page.goto(CATEGORY_URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        found = [h for h in hrefs if "varifeed" in h.lower() or "barres-de-coupe" in h.lower()]
-        log.info(f"Liens 'varifeed'/'barres-de-coupe' trouvés sur la page catégorie : {found}")
-        page.close()
-
-        # 2) Inspection de la page elle-même
         page = browser.new_page(user_agent=UA)
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
-        log.info(f"\ntitle={page.title()!r}")
 
-        tables = page.query_selector_all("table")
-        log.info(f"tables avant clic : {len(tables)}")
-        for i, t in enumerate(tables):
-            rows = t.query_selector_all("tr")
-            log.info(f"  table {i}: {len(rows)} rows")
-            for r in rows[:6]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"    row: {[c.inner_text().strip()[:30] for c in cells]}")
+        def table_header():
+            tables = page.query_selector_all("table")
+            if not tables:
+                return None, 0
+            rows = tables[0].query_selector_all("tr")
+            if not rows:
+                return None, 0
+            cells = rows[0].query_selector_all("td, th")
+            return [c.inner_text().strip()[:25] for c in cells], len(rows)
 
-        candidates = page.eval_on_selector_all(
-            "button, a, div[role='button'], span[role='button']",
-            "els => els.filter(e => /plus|more|voir|afficher|load|charger/i.test(e.textContent) && e.textContent.trim().length < 50).map(e => e.tagName + ':' + e.textContent.trim())"
-        )
-        log.info(f"éléments candidats 'voir plus' : {candidates}")
+        header, nrows = table_header()
+        log.info(f"AVANT clic : {len(header) if header else 0} colonnes, {nrows} rows")
+        log.info(f"  header : {header}")
 
-        text = page.inner_text("body")
-        log.info(f"\nbody text ({len(text)} car. ; 3000 affichés) : {text[:3000]!r}")
+        clicks = 0
+        for _ in range(10):
+            try:
+                btn = page.get_by_text("VOIR PLUS DE MODÈLES", exact=False).first
+                if not btn.is_visible(timeout=1500):
+                    break
+                btn.scroll_into_view_if_needed(timeout=2000)
+                btn.click(timeout=2000)
+                clicks += 1
+                page.wait_for_timeout(1500)
+            except Exception as e:
+                log.info(f"  arrêt clic : {e}")
+                break
+
+        log.info(f"\nclics 'VOIR PLUS DE MODÈLES' effectués : {clicks}")
+        header, nrows = table_header()
+        log.info(f"APRÈS clic(s) : {len(header) if header else 0} colonnes, {nrows} rows")
+        log.info(f"  header : {header}")
 
         browser.close()
 
