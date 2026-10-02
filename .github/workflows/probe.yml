@@ -18,3 +18,5 @@ jobs:
       - run: playwright install --with-deps chromium
 
       - run: python probe_manufacturers.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
