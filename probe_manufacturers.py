@@ -1,9 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-2 : la page gamme a des onglets "Aperçu /
-Caractéristiques / Brochures" (classe series-details__tab-button). On
-clique sur "Caractéristiques" et "Brochures" pour voir si ça révèle les
-modèles individuels (le texte mentionne déjà "Magnum 385 et 405").
+Case IH round modeles-3 : le sélecteur ".series-details__tab-button" ne
+matche rien. On dump tous les éléments dont la classe contient "tab"
+(nom + classe complète) pour trouver le vrai sélecteur des onglets
+Aperçu/Caractéristiques/Brochures.
 """
 
 import logging
@@ -28,34 +28,21 @@ def main():
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
-        for tab_name in ["Caractéristiques", "Brochures"]:
-            log.info(f"\n{'='*70}\nClic sur l'onglet : {tab_name}")
-            try:
-                btn = page.locator(".series-details__tab-button", has_text=tab_name).first
-                btn.click(timeout=3000)
-                page.wait_for_timeout(3000)
-            except Exception as e:
-                log.info(f"  ERREUR clic: {e}")
-                continue
-
-            n_tables = len(page.query_selector_all("table"))
-            log.info(f"  {n_tables} tables")
-
-            hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
-            log.info(f"  {len(hrefs)} liens PDF :")
-            for h in hrefs:
-                log.info(f"    {h}")
-
-            # Panneau actif (zone qui change selon l'onglet)
-            active_panel = page.query_selector(".series-details__tab-panel--active, [class*='tab-panel'][class*='active']")
-            if active_panel:
-                text = active_panel.inner_text()[:2000]
-                log.info(f"  texte du panneau actif (2000 car.) :\n{text}")
-            else:
-                body_text = page.inner_text("body")
-                log.info(f"  (pas de panneau identifié) texte body (2000 car. après 'Caractéristiques'):")
-                idx = body_text.find(tab_name)
-                log.info(body_text[idx:idx+2000] if idx != -1 else body_text[:2000])
+        info = page.evaluate(
+            """
+            () => {
+                const els = Array.from(document.querySelectorAll('[class*="tab"]'));
+                return els.map(e => ({
+                    tag: e.tagName,
+                    cls: e.className,
+                    text: e.innerText ? e.innerText.trim().slice(0, 40) : '',
+                }));
+            }
+            """
+        )
+        log.info(f"{len(info)} éléments avec 'tab' dans la classe :")
+        for e in info:
+            log.info(f"  <{e['tag']} class=\"{e['cls']}\"> texte: {e['text']!r}")
 
         browser.close()
 
