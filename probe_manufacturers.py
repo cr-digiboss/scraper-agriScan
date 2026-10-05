@@ -1,15 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-1 : l'utilisateur demande si on peut récupérer les
-vrais modèles individuels plutôt que des gammes agrégées. La sous-page
-"Gamme Magnum" n'avait ni carte ni tableau (sondage précédent) — on
-regarde ici en détail cette page (tous les liens, PDF, sections) pour
-trouver une source de données par modèle (brochure PDF, configurateur,
-etc.).
+Case IH round modeles-2 : la page gamme a des onglets "Aperçu /
+Caractéristiques / Brochures" (classe series-details__tab-button). On
+clique sur "Caractéristiques" et "Brochures" pour voir si ça révèle les
+modèles individuels (le texte mentionne déjà "Magnum 385 et 405").
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -29,50 +26,36 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4000)
 
-        log.info(f"titre: {page.title()}")
+        for tab_name in ["Caractéristiques", "Brochures"]:
+            log.info(f"\n{'='*70}\nClic sur l'onglet : {tab_name}")
+            try:
+                btn = page.locator(".series-details__tab-button", has_text=tab_name).first
+                btn.click(timeout=3000)
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.info(f"  ERREUR clic: {e}")
+                continue
 
-        # Tous les liens, y compris PDF
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        base_netloc = urlparse(page.url).netloc
-        same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if urlparse(h).netloc == base_netloc))
-        log.info(f"\n{len(same_domain)} liens même domaine :")
-        for h in same_domain:
-            log.info(f"  {h}")
+            n_tables = len(page.query_selector_all("table"))
+            log.info(f"  {n_tables} tables")
 
-        pdfs = [h for h in hrefs if h.lower().endswith(".pdf")]
-        log.info(f"\n{len(pdfs)} liens PDF :")
-        for h in pdfs:
-            log.info(f"  {h}")
+            hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
+            log.info(f"  {len(hrefs)} liens PDF :")
+            for h in hrefs:
+                log.info(f"    {h}")
 
-        # Classes évoquant un configurateur, un sélecteur de modèle, ou une
-        # liste de modèles au sein de la gamme.
-        class_info = page.evaluate(
-            """
-            () => {
-                const keywords = ['model', 'configurat', 'compare', 'spec', 'select', 'variant'];
-                const found = {};
-                keywords.forEach(k => {
-                    const els = document.querySelectorAll(`[class*="${k}"]`);
-                    if (els.length) {
-                        found[k] = {
-                            count: els.length,
-                            sample: Array.from(els).slice(0, 5).map(e => e.className),
-                        };
-                    }
-                });
-                return found;
-            }
-            """
-        )
-        log.info(f"\nclasses correspondantes : {class_info}")
-
-        # Texte intégral de la page pour repérer toute mention de modèles
-        # individuels (ex. "Magnum 340", "Magnum 380"...).
-        body_text = page.inner_text("body")
-        log.info(f"\ntaille texte body : {len(body_text)}")
-        log.info(body_text[:3000])
+            # Panneau actif (zone qui change selon l'onglet)
+            active_panel = page.query_selector(".series-details__tab-panel--active, [class*='tab-panel'][class*='active']")
+            if active_panel:
+                text = active_panel.inner_text()[:2000]
+                log.info(f"  texte du panneau actif (2000 car.) :\n{text}")
+            else:
+                body_text = page.inner_text("body")
+                log.info(f"  (pas de panneau identifié) texte body (2000 car. après 'Caractéristiques'):")
+                idx = body_text.find(tab_name)
+                log.info(body_text[idx:idx+2000] if idx != -1 else body_text[:2000])
 
         browser.close()
 
