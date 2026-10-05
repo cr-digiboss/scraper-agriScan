@@ -15,6 +15,7 @@ jobs:
           python-version: '3.12'
 
       - run: pip install -r requirements.txt
-      - run: playwright install --with-deps chromium
 
       - run: python probe_manufacturers.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
