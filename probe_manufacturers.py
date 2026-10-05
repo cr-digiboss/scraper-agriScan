@@ -1,15 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 5 : structures identifiées round 4 :
-- Case IH : des divs "product-card__summary-specs*" directement sur la
-  page catégorie tracteurs (plateforme CNH, comme New Holland mais avec
-  une nomenclature différente).
-- Deutz-Fahr / Same (groupe SDF) : une "table" en divs
-  "specifiche-tecniche_wrapper-table__table" (comme Fendt : grille en
-  divs, pas de <table> natif).
-- Monosem : rien de structuré trouvé — on vérifie le "planter-comparison-
-  tool" avant d'abandonner.
-On inspecte le détail (HTML) de ces structures.
+Round 6 :
+- Case IH : la carte "Gamme Magnum" dit "se décline en 6 modèles au
+  total" mais n'a que des specs agrégées (plage de puissance). On visite
+  la page de la gamme pour voir si le détail par modèle y est.
+- Deutz-Fahr/Same : le conteneur ".specifiche-tecniche_wrapper-table__
+  table" est vide après 5s d'attente (SPA Vue.js, attribut data-v-*
+  observé). On clique sur un onglet "Spécifications" si présent et on
+  attend plus longtemps avant de re-vérifier.
 """
 
 import logging
@@ -25,46 +23,43 @@ UA = (
 )
 
 
-def dump_html(page, selector, label, limit=2, max_len=2500):
-    els = page.query_selector_all(selector)
-    log.info(f"  {label} : {len(els)} éléments trouvés pour sélecteur {selector!r}")
-    for i, el in enumerate(els[:limit]):
-        log.info(f"  --- élément {i} ---")
-        log.info(el.evaluate("e => e.outerHTML")[:max_len])
-
-
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        log.info(f"\n{'='*70}\nCase IH tracteurs (categorie)")
-        page.goto("https://www.caseih.com/fr-fr/france/produits/tracteurs", timeout=30000, wait_until="domcontentloaded")
+        log.info(f"\n{'='*70}\nCase IH - gamme Magnum (sous-page)")
+        page.goto("https://www.caseih.com/fr-fr/france/produits/tracteurs/magnum-serie", timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
-        dump_html(page, ".product-card", "cartes produit", limit=2, max_len=3000)
+        log.info(f"  titre: {page.title()}")
+        cards = page.query_selector_all(".product-card")
+        log.info(f"  {len(cards)} .product-card trouvées")
+        for i, c in enumerate(cards[:8]):
+            title_el = c.query_selector(".product-card__title")
+            log.info(f"    carte {i}: {title_el.inner_text().strip() if title_el else '(pas de titre)'}")
+        n_tables = len(page.query_selector_all("table"))
+        log.info(f"  {n_tables} tables")
 
-        log.info(f"\n{'='*70}\nDeutz-Fahr serie 6")
-        page.goto("https://www.deutz-fahr.com/fr-fr/tracteurs/serie-6", timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
-        dump_html(page, ".specifiche-tecniche_wrapper-table__table", "table specifiche-tecniche", limit=1, max_len=4000)
-        dump_html(page, ".specifiche-tecniche_slider", "slider specifiche-tecniche", limit=1, max_len=2000)
-
-        log.info(f"\n{'='*70}\nSame Virtus")
+        log.info(f"\n{'='*70}\nSame Virtus - clic onglet Specifications")
         page.goto("https://www.same-tractors.com/fr-fr/tracteurs/virtus", timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(5000)
-        dump_html(page, ".specifiche-tecniche_wrapper-table__table", "table specifiche-tecniche", limit=1, max_len=4000)
-
-        log.info(f"\n{'='*70}\nMonosem planter-comparison-tool")
+        page.wait_for_timeout(4000)
         try:
-            page.goto("https://www.monosem.com/planter-comparison-tool/", timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(4000)
-            log.info(f"  titre: {page.title()}")
-            n_tables = len(page.query_selector_all("table"))
-            log.info(f"  {n_tables} tables")
-            body_text = page.inner_text("body")[:1500]
-            log.info(f"  texte body (1500 premiers car.) :\n{body_text}")
+            for text in ["Spécifications", "SPÉCIFICATIONS", "Specifiche", "Caractéristiques techniques"]:
+                btn = page.get_by_text(text, exact=False).first
+                if btn.is_visible(timeout=1500):
+                    log.info(f"  onglet trouvé : {text!r}, clic...")
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                    btn.click(timeout=2000)
+                    break
         except Exception as e:
-            log.info(f"  ERREUR: {e}")
+            log.info(f"  pas d'onglet cliquable trouvé : {e}")
+        page.wait_for_timeout(4000)
+        wrapper = page.query_selector(".specifiche-tecniche_wrapper-table__table")
+        log.info(f"  wrapper présent : {wrapper is not None}")
+        if wrapper:
+            html = wrapper.evaluate("e => e.outerHTML")
+            log.info(f"  longueur HTML : {len(html)}")
+            log.info(html[:4000])
 
         browser.close()
 
