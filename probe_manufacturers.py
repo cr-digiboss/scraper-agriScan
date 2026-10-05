@@ -1,11 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-4 : le vrai sélecteur d'onglet est
-".navigation-bar__tab" (Aperçu/Caractéristiques/Brochures). On clique sur
-"Caractéristiques" et "Brochures" avec ce bon sélecteur.
+Case IH round modeles-7 : on clique sur le bouton "CONFIGURER" (plusieurs
+occurrences sur la page) pour voir où il mène et s'il expose les modèles
+individuels de la gamme Magnum avec leurs specs.
 """
 
 import logging
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -31,59 +32,55 @@ def main():
             accept = page.locator("#onetrust-accept-btn-handler")
             if accept.is_visible(timeout=3000):
                 accept.click(timeout=3000)
-                log.info("bannière cookies fermée")
                 page.wait_for_timeout(1000)
-        except Exception as e:
-            log.info(f"pas de bannière cookies (ou échec fermeture) : {e}")
+        except Exception:
+            pass
 
-        def click_visible_tab(text):
-            """Deux copies du bandeau d'onglets existent dans le DOM (desktop
-            + mobile, l'une cachée en CSS) : on clique celle qui est visible."""
-            locs = page.locator(".navigation-bar__tab", has_text=text)
-            n = locs.count()
-            for i in range(n):
-                loc = locs.nth(i)
-                if loc.is_visible():
-                    loc.click(timeout=5000)
-                    return True
-            return False
+        # Les boutons CONFIGURER sont peut-être des <a> directs : on
+        # regarde d'abord leurs href avant de cliquer.
+        hrefs = page.eval_on_selector_all(
+            "a",
+            """els => els.filter(e => e.innerText && e.innerText.trim().toUpperCase().includes('CONFIGURER'))
+                       .map(e => e.href)"""
+        )
+        log.info(f"hrefs des boutons/liens CONFIGURER : {hrefs}")
 
-        log.info("=== Clic sur Caractéristiques ===")
-        ok = click_visible_tab("Caractéristiques")
-        log.info(f"clic réussi : {ok}")
+        # Sinon, clic réel et observation de la navigation.
+        locs = page.locator("text=CONFIGURER")
+        n = locs.count()
+        log.info(f"\n{n} éléments texte 'CONFIGURER' trouvés")
+        clicked = False
+        for i in range(n):
+            loc = locs.nth(i)
+            if loc.is_visible():
+                log.info(f"clic sur l'occurrence {i}...")
+                try:
+                    with page.expect_navigation(timeout=8000):
+                        loc.click(timeout=5000)
+                    clicked = True
+                    break
+                except Exception as e:
+                    log.info(f"  pas de navigation détectée ({e}), on vérifie l'URL quand même")
+                    clicked = True
+                    break
+
         page.wait_for_timeout(3000)
+        log.info(f"\nclic effectué : {clicked}")
+        log.info(f"URL actuelle : {page.url}")
+        log.info(f"titre : {page.title()}")
 
         n_tables = len(page.query_selector_all("table"))
         log.info(f"{n_tables} tables")
-        if n_tables:
-            rows = page.query_selector_all("table")[0].query_selector_all("tr")
-            log.info(f"table0: {len(rows)} rows")
-            for r in rows[:5]:
-                cells = r.query_selector_all("td, th")
-                log.info(f"  row: {[c.inner_text().strip()[:30] for c in cells]}")
 
-        # Cherche un sélecteur de modèle (dropdown/select) dans la section
-        # Caractéristiques.
-        selects = page.query_selector_all("select")
-        log.info(f"\n{len(selects)} <select> trouvés")
-        for s in selects:
-            opts = s.query_selector_all("option")
-            log.info(f"  options: {[o.inner_text().strip() for o in opts]}")
+        hrefs2 = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        base_netloc = urlparse(page.url).netloc
+        same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs2 if urlparse(h).netloc == base_netloc))
+        log.info(f"\n{len(same_domain)} liens même domaine :")
+        for h in same_domain[:40]:
+            log.info(f"  {h}")
 
         body_text = page.inner_text("body")
-        idx = body_text.find("Moteur")
-        log.info(f"\ntexte autour de 'Moteur' (2000 car.) :\n{body_text[idx:idx+2000] if idx!=-1 else '(non trouvé)'}")
-
-        log.info("\n=== Clic sur Brochures ===")
-        ok = click_visible_tab("Brochures")
-        log.info(f"clic réussi : {ok}")
-        page.wait_for_timeout(3000)
-        hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
-        log.info(f"{len(hrefs)} liens PDF :")
-        for h in hrefs:
-            log.info(f"  {h}")
-        body_text2 = page.inner_text("body")
-        log.info(f"\ntexte body après clic Brochures (2000 premiers car.) :\n{body_text2[:2000]}")
+        log.info(f"\ntexte body (3000 premiers car.) :\n{body_text[:3000]}")
 
         browser.close()
 
