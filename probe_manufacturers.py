@@ -1,12 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Lot 8, round 1 : sonde la structure de 4 nouvelles marques demandées
-(Monosem, Case IH, Deutz-Fahr, Same) — trouver le site officiel, une page
-catalogue/catégorie, des liens produits, puis la structure d'une fiche
-produit (tableau de specs ou autre).
+Round 2 : round 1 a donné des pages d'accueil/404 sans liens produits
+clairs dans l'échantillon tronqué. On repart des homepages et on imprime
+TOUS les liens même domaine pour repérer les vraies URLs de catégories.
 """
 
 import logging
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -19,10 +19,10 @@ UA = (
 )
 
 CANDIDATES = {
-    "Monosem": "https://www.monosem.com/gammes-de-produits/",
-    "Case IH": "https://www.caseih.com/emea/fr-fr/products",
-    "Deutz-Fahr": "https://www.deutz-fahr.com/fr-fr/produits",
-    "Same": "https://www.same-tractors.com/fr-fr/produits",
+    "Monosem": "https://www.monosem.com/",
+    "Case IH": "https://www.caseih.com/fr-fr/france/products",
+    "Deutz-Fahr": "https://www.deutz-fahr.com/fr-fr/",
+    "Same": "https://www.same-tractors.com/fr-fr/",
 }
 
 
@@ -44,17 +44,11 @@ def main():
             log.info(f"  URL finale: {page.url}")
             log.info(f"  titre: {page.title()}")
 
-            # Compte des tableaux et liens sur la page
-            n_tables = len(page.query_selector_all("table"))
             hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            log.info(f"  {n_tables} tables, {len(hrefs)} liens")
-
-            # Quelques liens représentatifs (uniques, même domaine)
-            from urllib.parse import urlparse
             base_netloc = urlparse(page.url).netloc
-            same_domain = sorted(set(h for h in hrefs if urlparse(h).netloc == base_netloc))
-            log.info(f"  échantillon de liens même domaine ({len(same_domain)} uniques) :")
-            for h in same_domain[:15]:
+            same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if urlparse(h).netloc == base_netloc))
+            log.info(f"  {len(same_domain)} liens uniques même domaine :")
+            for h in same_domain:
                 log.info(f"    {h}")
 
         browser.close()
