@@ -27,6 +27,15 @@ def main():
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
+        try:
+            accept = page.locator("#onetrust-accept-btn-handler")
+            if accept.is_visible(timeout=3000):
+                accept.click(timeout=3000)
+                log.info("bannière cookies fermée")
+                page.wait_for_timeout(1000)
+        except Exception as e:
+            log.info(f"pas de bannière cookies (ou échec fermeture) : {e}")
+
         log.info("=== Clic sur Caractéristiques ===")
         page.locator(".navigation-bar__tab", has_text="Caractéristiques").first.click(timeout=5000)
         page.wait_for_timeout(3000)
