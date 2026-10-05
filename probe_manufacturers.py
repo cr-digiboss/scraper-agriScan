@@ -1,13 +1,12 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-8 : le clic sur CONFIGURER échoue (barre de nav
-sticky qui intercepte le pointeur). On visite directement l'URL du
-configurateur déjà repérée (/outils-et-ressources/configurateur) pour
-voir sa structure (sélection de gamme/modèle, specs par modèle ?).
+Case IH round modeles-9 : le bouton TRACTEURS du configurateur n'a pas de
+href classique. On cherche une iframe (plateforme tierce fréquente pour
+ces outils CNH), puis on clique sur TRACTEURS en observant les nouvelles
+pages/popups et tout changement d'iframe.
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -25,7 +24,8 @@ URL = "https://www.caseih.com/fr-fr/france/outils-et-ressources/configurateur"
 def main():
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(user_agent=UA)
+        context = browser.new_context(user_agent=UA)
+        page = context.new_page()
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(5000)
 
@@ -37,21 +37,46 @@ def main():
         except Exception:
             pass
 
-        log.info(f"URL finale : {page.url}")
-        log.info(f"titre : {page.title()}")
+        iframes = page.query_selector_all("iframe")
+        log.info(f"{len(iframes)} iframes trouvées :")
+        for f in iframes:
+            log.info(f"  src={f.get_attribute('src')}")
 
-        n_tables = len(page.query_selector_all("table"))
-        log.info(f"{n_tables} tables")
+        # Clique sur TRACTEURS (copie visible) et observe nouvel onglet /
+        # navigation / changement d'iframe.
+        new_pages = []
+        context.on("page", lambda p2: new_pages.append(p2))
 
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        base_netloc = urlparse(page.url).netloc
-        same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if urlparse(h).netloc == base_netloc))
-        log.info(f"\n{len(same_domain)} liens même domaine :")
-        for h in same_domain:
-            log.info(f"  {h}")
+        locs = page.locator("text=TRACTEURS")
+        n = locs.count()
+        log.info(f"\n{n} éléments texte 'TRACTEURS'")
+        clicked = False
+        for i in range(n):
+            loc = locs.nth(i)
+            if loc.is_visible():
+                log.info(f"clic sur occurrence {i}")
+                try:
+                    loc.click(timeout=5000, force=True)
+                    clicked = True
+                except Exception as e:
+                    log.info(f"  échec clic : {e}")
+                break
+        page.wait_for_timeout(4000)
 
-        body_text = page.inner_text("body")
-        log.info(f"\ntexte body (3000 premiers car.) :\n{body_text[:3000]}")
+        log.info(f"\nclic effectué : {clicked}")
+        log.info(f"URL page principale : {page.url}")
+        log.info(f"nouveaux onglets ouverts : {len(new_pages)}")
+        for np in new_pages:
+            try:
+                np.wait_for_load_state(timeout=5000)
+            except Exception:
+                pass
+            log.info(f"  nouvel onglet URL : {np.url}")
+
+        iframes2 = page.query_selector_all("iframe")
+        log.info(f"\n{len(iframes2)} iframes après clic :")
+        for f in iframes2:
+            log.info(f"  src={f.get_attribute('src')}")
 
         browser.close()
 
