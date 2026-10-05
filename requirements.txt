@@ -1,5 +1,6 @@
 playwright==1.62.0
 beautifulsoup4==4.12.3
+pdfplumber==0.11.10
 psycopg2-binary==2.9.13
 python-dotenv==1.2.3
 qdrant-client==1.19.1

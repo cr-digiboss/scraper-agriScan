@@ -12,10 +12,12 @@ import json
 import time
 import random
 import logging
+from io import BytesIO
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 import requests
+import pdfplumber
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page
 from bs4 import BeautifulSoup
@@ -1059,6 +1061,197 @@ def scrape_case_ih(page: Page, existing_keys: set) -> list[Machine]:
             log.info(f"    ✓ {m.name}")
 
         time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Monosem — monosem.com (semoirs de précision)
+# Pas de <table> HTML sur ce site. Les seules specs structurées disponibles
+# sont dans un PDF "tableau général châssis" lié depuis chaque fiche famille
+# (ex. Tableau-general-chassis_NG-PLUS_EN.pdf) : 2 lignes d'en-tête (type de
+# châssis, sous-type), cellules fusionnées visuellement dans le PDF et
+# restituées par pdfplumber comme des colonnes à None répétés. Un autre PDF
+# vu sur le site ("tableau distribution") est une image sans texte
+# exploitable — couverture donc partielle, acceptée comme telle.
+# ─────────────────────────────────────────────────────────────────────────────
+
+MONOSEM_CATEGORIES = [
+    "https://www.monosem.com/precision-planters/",
+    "https://www.monosem.com/cultivators/",
+    "https://www.monosem.com/fertilizers/",
+]
+
+MONOSEM_EXCLUSIONS = ["technologies", "guidance-systems"]
+
+
+def _monosem_product_links(page: Page, base_path: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "monosem.com" not in u.netloc:
+            continue
+        if not u.path.startswith(base_path) or u.path.rstrip("/") == base_path.rstrip("/"):
+            continue
+        if any(x in u.path for x in MONOSEM_EXCLUSIONS):
+            continue
+        links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _monosem_chassis_pdf_url(page: Page) -> str | None:
+    hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
+    for href in hrefs:
+        if "general" in href.lower():
+            return href
+    return None
+
+
+def _monosem_forward_fill(row: list) -> list:
+    """Remplit les None d'une ligne d'en-tête PDF avec la valeur non vide
+    précédente : une cellule fusionnée visuellement dans le PDF est
+    restituée par pdfplumber comme une valeur suivie de None répétés sur
+    les colonnes qu'elle couvre."""
+    filled = []
+    last = None
+    for cell in row:
+        v = clean(cell)
+        if v:
+            last = v
+        filled.append(last)
+    return filled
+
+
+# Certains PDF Monosem ont des en-têtes de groupe en texte pivoté
+# (colonne latérale) que pdfplumber restitue à l'envers (ex. "EVIRD" pour
+# "DRIVE"). Constaté sur plusieurs familles, liste fermée des cas vus.
+MONOSEM_GARBLED_LABELS = {"EVIRD", "REZILITREF", "MESORCIM"}
+
+
+def _monosem_parse_chassis_table(pdf_bytes: bytes) -> dict:
+    """Parse le "tableau général châssis" : 2 lignes d'en-tête (type de
+    châssis, sous-type) qui forment par colonne un intitulé composite
+    (ex. "Rigid Monobar"), puis des lignes de specs (largeur, nombre
+    d'éléments de dosage...)."""
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        if not pdf.pages:
+            return {}
+        tables = pdf.pages[0].extract_tables()
+    if not tables:
+        return {}
+
+    table = tables[0]
+    if len(table) < 3:
+        return {}
+
+    n_cols = max(len(r) for r in table)
+    normalized = [list(r) + [None] * (n_cols - len(r)) for r in table]
+
+    # Colonnes jamais renseignées sur aucune ligne : espacement purement
+    # visuel dans le PDF, à ignorer.
+    used_cols = [
+        j for j in range(1, n_cols)
+        if any(clean(normalized[i][j]) for i in range(len(normalized)))
+    ]
+    if not used_cols:
+        return {}
+
+    header1 = _monosem_forward_fill(normalized[0])
+    header2 = _monosem_forward_fill(normalized[1])
+
+    variants = {}
+    for j in used_cols:
+        variant = " ".join(p for p in (header1[j], header2[j]) if p).strip()
+        if variant:
+            variants[j] = {"variant": variant, "specs": {}}
+
+    for row in normalized[2:]:
+        label = clean(row[0])
+        if not label or label.upper() in MONOSEM_GARBLED_LABELS:
+            continue
+        for j, data in variants.items():
+            val = clean(row[j]) if j < len(row) else ""
+            if val:
+                data["specs"][label] = val
+
+    return variants
+
+
+def scrape_monosem(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les gammes Monosem non encore présentes dans Neon, à partir du
+    "tableau général châssis" en PDF (voir note en tête de section —
+    couverture partielle : seules les specs châssis/largeurs sont
+    disponibles sous cette forme)."""
+    machines = []
+
+    for category_url in MONOSEM_CATEGORIES:
+        base_path = urlparse(category_url).path
+        category_slug = base_path.strip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Monosem ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _monosem_product_links(page, base_path)
+        log.info(f"  Monosem ({category_slug}) → {len(product_links)} fiches produit trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            pdf_url = _monosem_chassis_pdf_url(page)
+            if not pdf_url:
+                continue
+
+            try:
+                resp = requests.get(pdf_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+                resp.raise_for_status()
+            except Exception as e:
+                log.warning(f"    PDF inaccessible {pdf_url} → {e}")
+                continue
+
+            variants = _monosem_parse_chassis_table(resp.content)
+            if not variants:
+                continue
+
+            range_name = re.sub(r"\s*-\s*MONOSEM\s*$", "", clean(page.title()), flags=re.IGNORECASE)
+
+            for data in variants.values():
+                specs = data["specs"]
+                if not specs:
+                    continue
+                # Colonne légende (texte descriptif plutôt que de vraies
+                # valeurs, ex. "Number of rows") plutôt qu'une vraie
+                # variante produit : on l'écarte.
+                long_values = sum(1 for v in specs.values() if len(v.split()) >= 3)
+                if long_values > len(specs) / 2:
+                    continue
+                m = Machine()
+                m.brand = "Monosem"
+                m.range = range_name
+                m.name = range_name
+                m.variant = data["variant"]
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(data["specs"]), ensure_ascii=False)
+                key = f"{m.brand}|{m.name}|{m.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {m.name} ({m.variant})")
+
+            time.sleep(random.uniform(1.0, 2.0))
 
     return machines
 
@@ -3760,6 +3953,7 @@ def run() -> int:
             ("Massey Ferguson (masseyferguson.com)", scrape_massey_ferguson),
             ("New Holland (newholland.com)", scrape_new_holland),
             ("Case IH (caseih.com)", scrape_case_ih),
+            ("Monosem (monosem.com)", scrape_monosem),
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
             ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
