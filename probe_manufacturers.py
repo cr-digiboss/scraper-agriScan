@@ -1,9 +1,8 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-3 : le sélecteur ".series-details__tab-button" ne
-matche rien. On dump tous les éléments dont la classe contient "tab"
-(nom + classe complète) pour trouver le vrai sélecteur des onglets
-Aperçu/Caractéristiques/Brochures.
+Case IH round modeles-4 : le vrai sélecteur d'onglet est
+".navigation-bar__tab" (Aperçu/Caractéristiques/Brochures). On clique sur
+"Caractéristiques" et "Brochures" avec ce bon sélecteur.
 """
 
 import logging
@@ -28,21 +27,40 @@ def main():
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
 
-        info = page.evaluate(
-            """
-            () => {
-                const els = Array.from(document.querySelectorAll('[class*="tab"]'));
-                return els.map(e => ({
-                    tag: e.tagName,
-                    cls: e.className,
-                    text: e.innerText ? e.innerText.trim().slice(0, 40) : '',
-                }));
-            }
-            """
-        )
-        log.info(f"{len(info)} éléments avec 'tab' dans la classe :")
-        for e in info:
-            log.info(f"  <{e['tag']} class=\"{e['cls']}\"> texte: {e['text']!r}")
+        log.info("=== Clic sur Caractéristiques ===")
+        page.locator(".navigation-bar__tab", has_text="Caractéristiques").first.click(timeout=5000)
+        page.wait_for_timeout(3000)
+
+        n_tables = len(page.query_selector_all("table"))
+        log.info(f"{n_tables} tables")
+        if n_tables:
+            rows = page.query_selector_all("table")[0].query_selector_all("tr")
+            log.info(f"table0: {len(rows)} rows")
+            for r in rows[:5]:
+                cells = r.query_selector_all("td, th")
+                log.info(f"  row: {[c.inner_text().strip()[:30] for c in cells]}")
+
+        # Cherche un sélecteur de modèle (dropdown/select) dans la section
+        # Caractéristiques.
+        selects = page.query_selector_all("select")
+        log.info(f"\n{len(selects)} <select> trouvés")
+        for s in selects:
+            opts = s.query_selector_all("option")
+            log.info(f"  options: {[o.inner_text().strip() for o in opts]}")
+
+        body_text = page.inner_text("body")
+        idx = body_text.find("Moteur")
+        log.info(f"\ntexte autour de 'Moteur' (2000 car.) :\n{body_text[idx:idx+2000] if idx!=-1 else '(non trouvé)'}")
+
+        log.info("\n=== Clic sur Brochures ===")
+        page.locator(".navigation-bar__tab", has_text="Brochures").first.click(timeout=5000)
+        page.wait_for_timeout(3000)
+        hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
+        log.info(f"{len(hrefs)} liens PDF :")
+        for h in hrefs:
+            log.info(f"  {h}")
+        body_text2 = page.inner_text("body")
+        log.info(f"\ntexte body après clic Brochures (2000 premiers car.) :\n{body_text2[:2000]}")
 
         browser.close()
 
