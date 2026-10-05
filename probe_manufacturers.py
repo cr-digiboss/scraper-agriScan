@@ -36,8 +36,21 @@ def main():
         except Exception as e:
             log.info(f"pas de bannière cookies (ou échec fermeture) : {e}")
 
+        def click_visible_tab(text):
+            """Deux copies du bandeau d'onglets existent dans le DOM (desktop
+            + mobile, l'une cachée en CSS) : on clique celle qui est visible."""
+            locs = page.locator(".navigation-bar__tab", has_text=text)
+            n = locs.count()
+            for i in range(n):
+                loc = locs.nth(i)
+                if loc.is_visible():
+                    loc.click(timeout=5000)
+                    return True
+            return False
+
         log.info("=== Clic sur Caractéristiques ===")
-        page.locator(".navigation-bar__tab", has_text="Caractéristiques").first.click(timeout=5000)
+        ok = click_visible_tab("Caractéristiques")
+        log.info(f"clic réussi : {ok}")
         page.wait_for_timeout(3000)
 
         n_tables = len(page.query_selector_all("table"))
@@ -62,7 +75,8 @@ def main():
         log.info(f"\ntexte autour de 'Moteur' (2000 car.) :\n{body_text[idx:idx+2000] if idx!=-1 else '(non trouvé)'}")
 
         log.info("\n=== Clic sur Brochures ===")
-        page.locator(".navigation-bar__tab", has_text="Brochures").first.click(timeout=5000)
+        ok = click_visible_tab("Brochures")
+        log.info(f"clic réussi : {ok}")
         page.wait_for_timeout(3000)
         hrefs = page.eval_on_selector_all("a[href$='.pdf']", "els => els.map(e => e.href)")
         log.info(f"{len(hrefs)} liens PDF :")
