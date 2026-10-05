@@ -1,16 +1,13 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Bug Pöttinger signalé : "il manque plein de modèles". Deux pistes à
-vérifier :
-1. La page catégorie (ex. Faucheuses) a-t-elle une pagination / bouton
-   "voir plus" qui cache des liens produit au-delà du chargement initial ?
-2. Une fiche produit a-t-elle PLUSIEURS tables (dont seule tables[0] est
-   actuellement exploitée par le scraper), ou un bouton "voir plus de
-   modèles" similaire à New Holland ?
+Round 2 : pas de pagination manquante sur la page catégorie Faucheuses
+(13 liens, stable après scroll/clic). On regarde maintenant une fiche
+produit individuelle : combien de <table> au total (le scraper
+n'utilise que tables[0]), et s'il y a un bouton "voir plus de modèles"
+caché (comme New Holland).
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -30,52 +27,50 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        log.info(f"=== Page catégorie : {CATEGORY_URL} ===")
         page.goto(CATEGORY_URL, timeout=30000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
-
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        links_before = sorted(set(h for h in hrefs if "/produkte/detail/" in urlparse(h).path))
-        log.info(f"{len(links_before)} liens produit détectés avant interaction")
-
-        # Cherche un bouton "voir plus" / "charger plus" / pagination.
-        class_info = page.evaluate(
-            """
-            () => {
-                const keywords = ['load-more', 'pagination', 'show-more', 'mehr', 'plus', 'pager'];
-                const found = {};
-                keywords.forEach(k => {
-                    const els = document.querySelectorAll(`[class*="${k}"]`);
-                    if (els.length) {
-                        found[k] = Array.from(els).slice(0, 5).map(e => ({cls: e.className, text: e.innerText ? e.innerText.trim().slice(0,40) : ''}));
-                    }
-                });
-                return found;
-            }
-            """
+        hrefs = page.eval_on_selector_all(
+            "a[href]",
+            "els => els.map(e => e.href).filter(h => h.includes('/produkte/detail/'))"
         )
-        log.info(f"classes correspondant à pagination/voir plus : {class_info}")
+        links = sorted(set(hrefs))
+        log.info(f"{len(links)} fiches produit dans Faucheuses :")
+        for h in links:
+            log.info(f"  {h}")
 
-        # Essaie un scroll complet + clic sur tout bouton texte "plus"/"more"/"charger".
-        for _ in range(10):
-            page.mouse.wheel(0, 2000)
-            page.wait_for_timeout(300)
+        # Inspecte les 3 premières fiches en détail.
+        for url in links[:3]:
+            log.info(f"\n{'='*70}\n{url}")
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            for _ in range(6):
+                page.mouse.wheel(0, 1500)
+                page.wait_for_timeout(250)
 
-        for text in ["Voir plus", "Charger plus", "Afficher plus", "Load more", "Plus de produits"]:
-            try:
-                btn = page.get_by_text(text, exact=False).first
-                if btn.is_visible(timeout=1000):
-                    log.info(f"bouton trouvé et cliqué : {text!r}")
-                    btn.click(timeout=2000)
-                    page.wait_for_timeout(2000)
-            except Exception:
-                pass
+            tables = page.query_selector_all("table")
+            log.info(f"  {len(tables)} tables sur la page")
+            for i, t in enumerate(tables):
+                rows = t.query_selector_all("tr")
+                if rows:
+                    cells0 = rows[0].query_selector_all("td, th")
+                    header = [c.inner_text().strip()[:25] for c in cells0]
+                    log.info(f"    table {i}: {len(rows)} rows, en-tête={header}")
 
-        hrefs2 = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        links_after = sorted(set(h for h in hrefs2 if "/produkte/detail/" in urlparse(h).path))
-        log.info(f"{len(links_after)} liens produit détectés après scroll/clic")
-        new_links = set(links_after) - set(links_before)
-        log.info(f"nouveaux liens apparus : {sorted(new_links)}")
+            # Boutons "voir plus" / sélecteurs de modèles sur la fiche.
+            class_info = page.evaluate(
+                """
+                () => {
+                    const keywords = ['model', 'variant', 'show-more', 'load-more', 'mehr'];
+                    const found = {};
+                    keywords.forEach(k => {
+                        const els = document.querySelectorAll(`[class*="${k}"]`);
+                        if (els.length) found[k] = els.length;
+                    });
+                    return found;
+                }
+                """
+            )
+            log.info(f"  classes correspondantes : {class_info}")
 
         browser.close()
 
