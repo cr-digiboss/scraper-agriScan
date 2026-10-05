@@ -1226,7 +1226,14 @@ def scrape_monosem(page: Page, existing_keys: set) -> list[Machine]:
             range_name = re.sub(r"\s*-\s*MONOSEM\s*$", "", clean(page.title()), flags=re.IGNORECASE)
 
             for data in variants.values():
-                if not data["specs"]:
+                specs = data["specs"]
+                if not specs:
+                    continue
+                # Colonne légende (texte descriptif plutôt que de vraies
+                # valeurs, ex. "Number of rows") plutôt qu'une vraie
+                # variante produit : on l'écarte.
+                long_values = sum(1 for v in specs.values() if len(v.split()) >= 3)
+                if long_values > len(specs) / 2:
                     continue
                 m = Machine()
                 m.brand = "Monosem"
