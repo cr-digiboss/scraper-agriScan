@@ -1,15 +1,18 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 4 : aucune <table> trouvée round 3. Hypothèse : Case IH (CNH
-Industrial, comme New Holland) et Deutz-Fahr/Same (groupe SDF) partagent
-probablement un gabarit similaire à New Holland (onglets Vue d'ensemble/
-Modèles/Spécifications, cartes model-listing chargées en JS). On
-recherche des classes similaires, et on imprime la liste COMPLETE des
-liens (pas tronquée à 25) pour la categorie Case IH tracteurs.
+Round 5 : structures identifiées round 4 :
+- Case IH : des divs "product-card__summary-specs*" directement sur la
+  page catégorie tracteurs (plateforme CNH, comme New Holland mais avec
+  une nomenclature différente).
+- Deutz-Fahr / Same (groupe SDF) : une "table" en divs
+  "specifiche-tecniche_wrapper-table__table" (comme Fendt : grille en
+  divs, pas de <table> natif).
+- Monosem : rien de structuré trouvé — on vérifie le "planter-comparison-
+  tool" avant d'abandonner.
+On inspecte le détail (HTML) de ces structures.
 """
 
 import logging
-from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -21,12 +24,13 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-PAGES = {
-    "Case IH - tracteurs (categorie)": "https://www.caseih.com/fr-fr/france/produits/tracteurs",
-    "Deutz-Fahr - serie 6": "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-6",
-    "Same - Virtus": "https://www.same-tractors.com/fr-fr/tracteurs/virtus",
-    "Monosem - fiche technique NG Plus": "https://www.monosem.com/fiche-technique/ng-plus-ng-plus-e/",
-}
+
+def dump_html(page, selector, label, limit=2, max_len=2500):
+    els = page.query_selector_all(selector)
+    log.info(f"  {label} : {len(els)} éléments trouvés pour sélecteur {selector!r}")
+    for i, el in enumerate(els[:limit]):
+        log.info(f"  --- élément {i} ---")
+        log.info(el.evaluate("e => e.outerHTML")[:max_len])
 
 
 def main():
@@ -34,49 +38,33 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        for label, url in PAGES.items():
-            log.info(f"\n{'='*70}\n{label} → {url}")
-            try:
-                resp = page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                log.info(f"  status: {resp.status if resp else None}")
-                page.wait_for_timeout(5000)
-            except Exception as e:
-                log.info(f"  ERREUR goto: {e}")
-                continue
+        log.info(f"\n{'='*70}\nCase IH tracteurs (categorie)")
+        page.goto("https://www.caseih.com/fr-fr/france/produits/tracteurs", timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        dump_html(page, ".product-card", "cartes produit", limit=2, max_len=3000)
 
-            log.info(f"  URL finale: {page.url}")
+        log.info(f"\n{'='*70}\nDeutz-Fahr serie 6")
+        page.goto("https://www.deutz-fahr.com/fr-fr/tracteurs/serie-6", timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        dump_html(page, ".specifiche-tecniche_wrapper-table__table", "table specifiche-tecniche", limit=1, max_len=4000)
+        dump_html(page, ".specifiche-tecniche_slider", "slider specifiche-tecniche", limit=1, max_len=2000)
+
+        log.info(f"\n{'='*70}\nSame Virtus")
+        page.goto("https://www.same-tractors.com/fr-fr/tracteurs/virtus", timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        dump_html(page, ".specifiche-tecniche_wrapper-table__table", "table specifiche-tecniche", limit=1, max_len=4000)
+
+        log.info(f"\n{'='*70}\nMonosem planter-comparison-tool")
+        try:
+            page.goto("https://www.monosem.com/planter-comparison-tool/", timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(4000)
             log.info(f"  titre: {page.title()}")
-
             n_tables = len(page.query_selector_all("table"))
             log.info(f"  {n_tables} tables")
-
-            # Classes évoquant une structure de specs / listing de modèles
-            class_info = page.evaluate(
-                """
-                () => {
-                    const keywords = ['spec', 'model-listing', 'techdata', 'model-detail', 'caracteristique', 'datasheet', 'tab'];
-                    const found = {};
-                    keywords.forEach(k => {
-                        const els = document.querySelectorAll(`[class*="${k}"]`);
-                        if (els.length) {
-                            found[k] = {
-                                count: els.length,
-                                sample: Array.from(els).slice(0, 5).map(e => e.className),
-                            };
-                        }
-                    });
-                    return found;
-                }
-                """
-            )
-            log.info(f"  classes correspondantes : {class_info}")
-
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            base_netloc = urlparse(page.url).netloc
-            same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if urlparse(h).netloc == base_netloc))
-            log.info(f"  {len(same_domain)} liens uniques même domaine (liste complète) :")
-            for h in same_domain:
-                log.info(f"    {h}")
+            body_text = page.inner_text("body")[:1500]
+            log.info(f"  texte body (1500 premiers car.) :\n{body_text}")
+        except Exception as e:
+            log.info(f"  ERREUR: {e}")
 
         browser.close()
 
