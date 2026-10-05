@@ -1548,8 +1548,12 @@ def scrape_kemper(page: Page, existing_keys: set) -> list[Machine]:
 # Pöttinger — poettinger.at
 # La page catégorie (/produkte/kategorie/<code>/<slug>) liste directement les
 # fiches produit (/produkte/detail/<slug>/<nom>) : pas de crawl à 3 niveaux.
-# Une fiche produit a un <table> unique, une colonne par modèle de la gamme,
-# compatible avec le parser générique _machines_from_wide_table.
+# Une fiche produit a un ou plusieurs <table>, une colonne par modèle de la
+# gamme — certaines séries à plusieurs lignes de finition (ex. "Alpha Motion")
+# étalent leurs modèles sur 2+ tables distinctes qu'il faut toutes parcourir
+# (bug corrigé : seule tables[0] était lue, ce qui faisait disparaître les
+# modèles des tables suivantes). Chaque table reste compatible avec le parser
+# générique _machines_from_wide_table.
 # ─────────────────────────────────────────────────────────────────────────────
 
 POTTINGER_CATEGORIES = {
@@ -1612,13 +1616,19 @@ def scrape_pottinger(page: Page, existing_keys: set) -> list[Machine]:
 
             range_name = clean(page.title()).split("|")[0].strip()
 
-            for candidats in _machines_from_wide_table(tables[0], "Pöttinger", category, range_name, url):
-                key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
-                if key in existing_keys:
-                    continue
-                machines.append(candidats)
-                existing_keys.add(key)
-                log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
+            # Certaines fiches produit (ex. séries à plusieurs lignes de finition
+            # comme "Alpha Motion") ont PLUSIEURS <table>, chacune couvrant un
+            # sous-ensemble de modèles différents (constaté : 2 tables donnant
+            # 5 modèles distincts au total) — il faut donc toutes les parcourir,
+            # pas seulement la première.
+            for table in tables:
+                for candidats in _machines_from_wide_table(table, "Pöttinger", category, range_name, url):
+                    key = f"{candidats.brand}|{candidats.name}|{candidats.variant}"
+                    if key in existing_keys:
+                        continue
+                    machines.append(candidats)
+                    existing_keys.add(key)
+                    log.info(f"    [{i}/{len(product_links)}] ✓ {candidats.name}")
 
             time.sleep(random.uniform(1.0, 2.0))
 
