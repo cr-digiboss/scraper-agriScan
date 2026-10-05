@@ -977,6 +977,93 @@ def scrape_new_holland(page: Page, existing_keys: set) -> list[Machine]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Case IH — caseih.com (CNH Industrial, même plateforme que New Holland)
+# Pas de <table> sur ce site : les pages catégorie affichent directement des
+# cartes ".product-card" avec des specs résumées (une carte par GAMME, ex.
+# "Gamme Magnum™", pas par modèle individuel — la sous-page de la gamme n'a
+# aucun détail supplémentaire par modèle, vérifié par sondage).
+# ─────────────────────────────────────────────────────────────────────────────
+
+CASEIH_CATEGORIES = [
+    "https://www.caseih.com/fr-fr/france/produits/tracteurs",
+    "https://www.caseih.com/fr-fr/france/produits/chargeurs",
+    "https://www.caseih.com/fr-fr/france/produits/chargeurs-telescopiques",
+    "https://www.caseih.com/fr-fr/france/produits/materiels-de-recolte",
+    "https://www.caseih.com/fr-fr/france/produits/paille-et-fourrage",
+]
+
+
+def _caseih_cards(page: Page) -> list:
+    return page.evaluate(
+        """
+        () => {
+            const cards = Array.from(document.querySelectorAll('.product-card'));
+            return cards.map(c => {
+                const titleEl = c.querySelector('.product-card__title');
+                const name = titleEl ? titleEl.innerText.trim() : '';
+                const href = c.getAttribute('href') || '';
+                const specs = {};
+                c.querySelectorAll('.product-card__summary-specs-item').forEach(item => {
+                    const label = item.querySelector('.product-card__summary-specs-headline');
+                    const value = item.querySelector('.product-card__summary-specs-value');
+                    if (label && value) {
+                        const l = label.innerText.trim();
+                        const v = value.innerText.trim();
+                        if (l && v) specs[l] = v;
+                    }
+                });
+                return {name, href, specs};
+            });
+        }
+        """
+    )
+
+
+def scrape_case_ih(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les gammes Case IH non encore présentes dans Neon (granularité
+    gamme, pas modèle individuel — voir note en tête de section)."""
+    machines = []
+
+    for category_url in CASEIH_CATEGORIES:
+        category_slug = category_url.rstrip("/").split("/")[-1]
+
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(5000)
+        except Exception as e:
+            log.warning(f"  Case IH ({category_slug}) inaccessible : {e}")
+            continue
+
+        category = normaliser_categorie(category_slug)
+        cards = _caseih_cards(page)
+        log.info(f"  Case IH ({category_slug}) → {len(cards)} gammes trouvées")
+
+        for card in cards:
+            name = clean(card["name"])
+            specs = card["specs"]
+            if not name or not specs:
+                continue
+            href = card["href"]
+            m = Machine()
+            m.brand = "Case IH"
+            m.name = name
+            m.category = category
+            m.sourceUrl = href if href.startswith("http") else f"https://www.caseih.com{href}"
+            m.statut = "active"
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    ✓ {m.name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # AVR — avrmachinery.com (matériel pomme de terre)
 # Structure : chaque fiche produit a un petit tableau clé/valeur (la première
 # ligne affiche juste le nom du modèle, sans clé).
@@ -3672,6 +3759,7 @@ def run() -> int:
             ("Fendt (fendt.com)", scrape_fendt),
             ("Massey Ferguson (masseyferguson.com)", scrape_massey_ferguson),
             ("New Holland (newholland.com)", scrape_new_holland),
+            ("Case IH (caseih.com)", scrape_case_ih),
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
             ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
