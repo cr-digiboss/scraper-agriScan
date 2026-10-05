@@ -1,8 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-7 : on clique sur le bouton "CONFIGURER" (plusieurs
-occurrences sur la page) pour voir où il mène et s'il expose les modèles
-individuels de la gamme Magnum avec leurs specs.
+Case IH round modeles-8 : le clic sur CONFIGURER échoue (barre de nav
+sticky qui intercepte le pointeur). On visite directement l'URL du
+configurateur déjà repérée (/outils-et-ressources/configurateur) pour
+voir sa structure (sélection de gamme/modèle, specs par modèle ?).
 """
 
 import logging
@@ -18,7 +19,7 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-URL = "https://www.caseih.com/fr-fr/france/produits/tracteurs/magnum-serie"
+URL = "https://www.caseih.com/fr-fr/france/outils-et-ressources/configurateur"
 
 
 def main():
@@ -26,7 +27,7 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
         page.goto(URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
+        page.wait_for_timeout(5000)
 
         try:
             accept = page.locator("#onetrust-accept-btn-handler")
@@ -36,47 +37,17 @@ def main():
         except Exception:
             pass
 
-        # Les boutons CONFIGURER sont peut-être des <a> directs : on
-        # regarde d'abord leurs href avant de cliquer.
-        hrefs = page.eval_on_selector_all(
-            "a",
-            """els => els.filter(e => e.innerText && e.innerText.trim().toUpperCase().includes('CONFIGURER'))
-                       .map(e => e.href)"""
-        )
-        log.info(f"hrefs des boutons/liens CONFIGURER : {hrefs}")
-
-        # Sinon, clic réel et observation de la navigation.
-        locs = page.locator("text=CONFIGURER")
-        n = locs.count()
-        log.info(f"\n{n} éléments texte 'CONFIGURER' trouvés")
-        clicked = False
-        for i in range(n):
-            loc = locs.nth(i)
-            if loc.is_visible():
-                log.info(f"clic sur l'occurrence {i}...")
-                try:
-                    with page.expect_navigation(timeout=8000):
-                        loc.click(timeout=5000)
-                    clicked = True
-                    break
-                except Exception as e:
-                    log.info(f"  pas de navigation détectée ({e}), on vérifie l'URL quand même")
-                    clicked = True
-                    break
-
-        page.wait_for_timeout(3000)
-        log.info(f"\nclic effectué : {clicked}")
-        log.info(f"URL actuelle : {page.url}")
+        log.info(f"URL finale : {page.url}")
         log.info(f"titre : {page.title()}")
 
         n_tables = len(page.query_selector_all("table"))
         log.info(f"{n_tables} tables")
 
-        hrefs2 = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
         base_netloc = urlparse(page.url).netloc
-        same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs2 if urlparse(h).netloc == base_netloc))
+        same_domain = sorted(set(h.split("?")[0].split("#")[0] for h in hrefs if urlparse(h).netloc == base_netloc))
         log.info(f"\n{len(same_domain)} liens même domaine :")
-        for h in same_domain[:40]:
+        for h in same_domain:
             log.info(f"  {h}")
 
         body_text = page.inner_text("body")
