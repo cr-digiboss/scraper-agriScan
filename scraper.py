@@ -1123,6 +1123,12 @@ def _monosem_forward_fill(row: list) -> list:
     return filled
 
 
+# Certains PDF Monosem ont des en-têtes de groupe en texte pivoté
+# (colonne latérale) que pdfplumber restitue à l'envers (ex. "EVIRD" pour
+# "DRIVE"). Constaté sur plusieurs familles, liste fermée des cas vus.
+MONOSEM_GARBLED_LABELS = {"EVIRD", "REZILITREF", "MESORCIM"}
+
+
 def _monosem_parse_chassis_table(pdf_bytes: bytes) -> dict:
     """Parse le "tableau général châssis" : 2 lignes d'en-tête (type de
     châssis, sous-type) qui forment par colonne un intitulé composite
@@ -1162,7 +1168,7 @@ def _monosem_parse_chassis_table(pdf_bytes: bytes) -> dict:
 
     for row in normalized[2:]:
         label = clean(row[0])
-        if not label:
+        if not label or label.upper() in MONOSEM_GARBLED_LABELS:
             continue
         for j, data in variants.items():
             val = clean(row[j]) if j < len(row) else ""
