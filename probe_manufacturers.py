@@ -1,9 +1,9 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Case IH round modeles-9 : le bouton TRACTEURS du configurateur n'a pas de
-href classique. On cherche une iframe (plateforme tierce fréquente pour
-ces outils CNH), puis on clique sur TRACTEURS en observant les nouvelles
-pages/popups et tout changement d'iframe.
+Case IH round modeles-10 (dernier essai) : capture des requêtes réseau
+déclenchées par le clic sur TRACTEURS, attente plus longue, et inspection
+du contenu réel des 2 iframes (via content_frame()) plutôt que juste
+leur attribut src.
 """
 
 import logging
@@ -37,46 +37,31 @@ def main():
         except Exception:
             pass
 
-        iframes = page.query_selector_all("iframe")
-        log.info(f"{len(iframes)} iframes trouvées :")
-        for f in iframes:
-            log.info(f"  src={f.get_attribute('src')}")
+        # Inspection du contenu réel des iframes (frames du navigateur).
+        log.info(f"{len(page.frames)} frames (y compris principale) :")
+        for fr in page.frames:
+            log.info(f"  url={fr.url!r} name={fr.name!r}")
 
-        # Clique sur TRACTEURS (copie visible) et observe nouvel onglet /
-        # navigation / changement d'iframe.
-        new_pages = []
-        context.on("page", lambda p2: new_pages.append(p2))
+        requests_seen = []
+        page.on("request", lambda req: requests_seen.append((req.resource_type, req.url)))
 
         locs = page.locator("text=TRACTEURS")
-        n = locs.count()
-        log.info(f"\n{n} éléments texte 'TRACTEURS'")
-        clicked = False
-        for i in range(n):
+        for i in range(locs.count()):
             loc = locs.nth(i)
             if loc.is_visible():
-                log.info(f"clic sur occurrence {i}")
-                try:
-                    loc.click(timeout=5000, force=True)
-                    clicked = True
-                except Exception as e:
-                    log.info(f"  échec clic : {e}")
+                loc.click(timeout=5000, force=True)
                 break
-        page.wait_for_timeout(4000)
 
-        log.info(f"\nclic effectué : {clicked}")
-        log.info(f"URL page principale : {page.url}")
-        log.info(f"nouveaux onglets ouverts : {len(new_pages)}")
-        for np in new_pages:
-            try:
-                np.wait_for_load_state(timeout=5000)
-            except Exception:
-                pass
-            log.info(f"  nouvel onglet URL : {np.url}")
+        page.wait_for_timeout(8000)
 
-        iframes2 = page.query_selector_all("iframe")
-        log.info(f"\n{len(iframes2)} iframes après clic :")
-        for f in iframes2:
-            log.info(f"  src={f.get_attribute('src')}")
+        log.info(f"\n{len(page.frames)} frames après clic :")
+        for fr in page.frames:
+            log.info(f"  url={fr.url!r} name={fr.name!r}")
+
+        log.info(f"\n{len(requests_seen)} requêtes réseau après le clic :")
+        for rtype, url in requests_seen:
+            if rtype in ("xhr", "fetch", "document"):
+                log.info(f"  [{rtype}] {url}")
 
         browser.close()
 
