@@ -1,10 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 2 : pas de pagination manquante sur la page catégorie Faucheuses
-(13 liens, stable après scroll/clic). On regarde maintenant une fiche
-produit individuelle : combien de <table> au total (le scraper
-n'utilise que tables[0]), et s'il y a un bouton "voir plus de modèles"
-caché (comme New Holland).
+Round 3 : round 2 tronquait l'en-tête affiché à 25 caractères pour l'affichage,
+ce qui a pu masquer du texte distinctif après ce point (le scraper réel, lui,
+n'utilise pas de troncature). On réaffiche le texte complet des en-têtes de la
+page "EUROCAT Alpha Motion", + on inspecte le HTML brut des cellules d'en-tête
+(colspan éventuel) pour confirmer si colonnes 1/2 sont vraiment identiques.
 """
 
 import logging
@@ -19,7 +19,7 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-CATEGORY_URL = "https://www.poettinger.at/fr_be/produkte/kategorie/mw/faucheuses"
+URL = "https://www.poettinger.at/fr_be/produkte/detail/euam/eurocat-alpha-motion-faucheuses-a-tambours-frontales"
 
 
 def main():
@@ -27,50 +27,35 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        page.goto(CATEGORY_URL, timeout=30000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        hrefs = page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => e.href).filter(h => h.includes('/produkte/detail/'))"
-        )
-        links = sorted(set(hrefs))
-        log.info(f"{len(links)} fiches produit dans Faucheuses :")
-        for h in links:
-            log.info(f"  {h}")
+        page.goto(URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        for _ in range(6):
+            page.mouse.wheel(0, 1500)
+            page.wait_for_timeout(250)
 
-        # Inspecte les 3 premières fiches en détail.
-        for url in links[:3]:
-            log.info(f"\n{'='*70}\n{url}")
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-            for _ in range(6):
-                page.mouse.wheel(0, 1500)
-                page.wait_for_timeout(250)
+        tables = page.query_selector_all("table")
+        log.info(f"{len(tables)} tables sur la page")
+        for i, t in enumerate(tables):
+            rows = t.query_selector_all("tr")
+            if not rows:
+                continue
+            cells0 = rows[0].query_selector_all("td, th")
+            log.info(f"\n--- table {i} : en-tête complet (sans troncature) ---")
+            for j, c in enumerate(cells0):
+                full_text = c.inner_text().strip()
+                colspan = c.get_attribute("colspan")
+                outer_html = c.evaluate("el => el.outerHTML")[:300]
+                log.info(f"  col {j}: colspan={colspan!r} texte={full_text!r}")
+                log.info(f"         html={outer_html!r}")
 
-            tables = page.query_selector_all("table")
-            log.info(f"  {len(tables)} tables sur la page")
-            for i, t in enumerate(tables):
-                rows = t.query_selector_all("tr")
-                if rows:
-                    cells0 = rows[0].query_selector_all("td, th")
-                    header = [c.inner_text().strip()[:25] for c in cells0]
-                    log.info(f"    table {i}: {len(rows)} rows, en-tête={header}")
-
-            # Boutons "voir plus" / sélecteurs de modèles sur la fiche.
-            class_info = page.evaluate(
-                """
-                () => {
-                    const keywords = ['model', 'variant', 'show-more', 'load-more', 'mehr'];
-                    const found = {};
-                    keywords.forEach(k => {
-                        const els = document.querySelectorAll(`[class*="${k}"]`);
-                        if (els.length) found[k] = els.length;
-                    });
-                    return found;
-                }
-                """
-            )
-            log.info(f"  classes correspondantes : {class_info}")
+            # Quelques lignes de données pour voir si les valeurs diffèrent entre
+            # colonnes 1 et 2 (si oui, ce sont bien 2 modèles distincts malgré le
+            # nom identique — peut-être une variante largeur/couleur).
+            log.info(f"  -- 5 premières lignes de données --")
+            for row in rows[1:6]:
+                cells = row.query_selector_all("td, th")
+                vals = [c.inner_text().strip()[:40] for c in cells]
+                log.info(f"    {vals}")
 
         browser.close()
 
