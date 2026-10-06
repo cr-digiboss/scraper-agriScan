@@ -1257,7 +1257,7 @@ def scrape_monosem(page: Page, existing_keys: set) -> list[Machine]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Deutz-Fahr (deutz-fahr.com) & Same (same-tractors.com) — plateforme SDF Group
+# Same (same-tractors.com) — plateforme SDF Group
 # Le tableau de specs HTML de la fiche produit (SPA Vue.js) reste vide (aucune
 # requête réseau ni état embarqué, confirmé par sondage). En revanche certaines
 # fiches ont un PDF "brochure" téléchargeable (lien /media/*.pdf) avec de
@@ -1268,10 +1268,15 @@ def scrape_monosem(page: Page, existing_keys: set) -> list[Machine]:
 # ligne d'en-tête reconnaissable), lignes de titre de section sans valeur
 # (ex. "MOTEUR") à ignorer. Couverture partielle : seules les fiches avec un
 # PDF brochure direct (pas Issuu, non exploitable) sont capturées.
+#
+# Deutz-Fahr (même plateforme, deutz-fahr.com) a été testé avec le même
+# code mais est bloqué par une protection anti-bot (Cloudflare, page "Just a
+# moment..." systématique dès la 2e/3e page visitée) depuis les runners
+# GitHub Actions — confirmé sur 3 essais successifs, non lié à la logique de
+# parsing. Non implémenté pour cette raison.
 # ─────────────────────────────────────────────────────────────────────────────
 
 SDF_SITES = {
-    "Deutz-Fahr": "https://www.deutz-fahr.com/fr-fr",
     "Same": "https://www.same-tractors.com/fr-fr",
 }
 
@@ -1494,11 +1499,6 @@ def _sdf_scrape_brand(page: Page, brand: str, home: str, existing_keys: set) -> 
         time.sleep(random.uniform(1.0, 2.0))
 
     return machines
-
-
-def scrape_deutz_fahr(page: Page, existing_keys: set) -> list[Machine]:
-    """Scrape les modèles Deutz-Fahr via les PDF brochure (couverture partielle)."""
-    return _sdf_scrape_brand(page, "Deutz-Fahr", SDF_SITES["Deutz-Fahr"], existing_keys)
 
 
 def scrape_same(page: Page, existing_keys: set) -> list[Machine]:
@@ -4214,7 +4214,6 @@ def run() -> int:
             ("New Holland (newholland.com)", scrape_new_holland),
             ("Case IH (caseih.com)", scrape_case_ih),
             ("Monosem (monosem.com)", scrape_monosem),
-            ("Deutz-Fahr (deutz-fahr.com)", scrape_deutz_fahr),
             ("Same (same-tractors.com)", scrape_same),
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
