@@ -1423,18 +1423,30 @@ def _sdf_scrape_brand(page: Page, brand: str, home: str, existing_keys: set) -> 
     product_links = _sdf_product_links(page, home)
     log.info(f"  {brand} → {len(product_links)} fiches modèles trouvées")
     category = normaliser_categorie("tracteurs")
+    seen_pdfs = set()
 
     for i, url in enumerate(sorted(product_links), 1):
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
+            # Le bouton "Télécharger la brochure" est chargé paresseusement :
+            # il ne devient présent dans le DOM qu'après défilement (constaté
+            # par sondage).
+            for _ in range(8):
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(300)
         except Exception as e:
             log.warning(f"    Erreur {url} → {e}")
             continue
 
         pdf_url = _sdf_brochure_pdf_url(page)
-        if not pdf_url:
+        if not pdf_url or pdf_url in seen_pdfs:
+            # PDF absent, ou déjà traité via une autre fiche produit de la
+            # même sous-gamme (ex. Krypton / Krypton F / Krypton M partagent
+            # la même brochure) — éviter d'injecter les mêmes variantes
+            # plusieurs fois sous des noms de gamme différents.
             continue
+        seen_pdfs.add(pdf_url)
         try:
             resp = requests.get(pdf_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
@@ -1442,7 +1454,10 @@ def _sdf_scrape_brand(page: Page, brand: str, home: str, existing_keys: set) -> 
             log.warning(f"    PDF inaccessible {pdf_url} → {e}")
             continue
 
-        range_name = re.split(r"\s*[|–-]\s*", clean(page.title()))[0].strip()
+        # Le titre de page peut être une phrase marketing complète (ex.
+        # "SAME Dorado Natural, tracteur puissant le plus polyvalent...") :
+        # on tronque à la première virgule/deux-points/barre verticale.
+        range_name = re.split(r"\s*[|–,:]\s*", clean(page.title()))[0].strip()
 
         try:
             with pdfplumber.open(BytesIO(resp.content)) as pdf:
