@@ -5,6 +5,13 @@ on:
     - cron: '0 2 * * *'  # chaque nuit à 2h UTC
   workflow_dispatch:  # permet aussi un lancement manuel depuis GitHub
 
+# Un seul scrape à la fois : un lancement manuel pendant que le cron (ou un
+# autre lancement manuel) tourne encore attend la fin du run en cours au lieu
+# de s'exécuter en parallèle (évite les écritures concurrentes sur Neon/Qdrant).
+concurrency:
+  group: scraper-agriscan
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
