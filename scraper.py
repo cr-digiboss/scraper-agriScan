@@ -2236,33 +2236,19 @@ def scrape_kuhn(page: Page, existing_keys: set) -> list[Machine]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # JCB — jcb.com
-# Crawl par catégories (construction + agricole). Tableau large classique
-# (colonne 0 = attribut, en-tête = codes modèles), compatible avec le
-# parser générique déjà utilisé pour Pöttinger/Lemken/Grimme.
+# JCB vend surtout des engins de chantier (pelles, chargeuses-pelleteuses,
+# compacteurs, nacelles, chariots élévateurs industriels, groupes
+# électrogènes...) ; seules les catégories ci-dessous sont de l'équipement
+# agricole (signalé par l'utilisateur : des produits non-agricoles étaient
+# remontés). Tableau large classique (colonne 0 = attribut, en-tête = codes
+# modèles), compatible avec le parser générique déjà utilisé pour
+# Pöttinger/Lemken/Grimme.
 # ─────────────────────────────────────────────────────────────────────────────
 
 JCB_CATEGORIES = {
-    "Chargeurs compacts sur chenilles": "https://www.jcb.com/fr-FR/products/machines/chargeurs-compacts-sur-chenilles/",
-    "Chargeuses compactes sur pneus": "https://www.jcb.com/fr-FR/products/machines/skid-steer-loader/",
-    "Chargeuses-pelleteuses": "https://www.jcb.com/fr-FR/products/machines/chargeuses-pelleteuses/",
-    "Chargeuses sur pneumatiques": "https://www.jcb.com/fr-FR/products/machines/chargeuses-sur-pneumatiques/",
-    "Chariots élévateurs tout-terrain": "https://www.jcb.com/fr-FR/products/machines/rough-terrain-forklifts/",
     "Télescopiques rotatifs": "https://www.jcb.com/fr-FR/products/machines/rotating-telehandlers/",
-    "Compacteurs monobille": "https://www.jcb.com/fr-FR/products/machines/single-drum-soil-compactors/",
-    "Dumpers de chantier": "https://www.jcb.com/fr-FR/products/machines/site-dumpers/",
-    "Bennes": "https://www.jcb.com/fr-FR/products/machines/dumpsters/",
-    "Groupes électrogènes": "https://www.jcb.com/fr-FR/products/machines/groupes-electrogenes/",
-    "Hydradig": "https://www.jcb.com/fr-FR/products/machines/hydradig/",
-    "Mini-pelles": "https://www.jcb.com/fr-FR/products/machines/mini-pelles/",
-    "Nacelles articulées": "https://www.jcb.com/fr-FR/products/machines/articulated-booms/",
-    "Nacelles ciseaux électriques": "https://www.jcb.com/fr-FR/products/machines/nacelles-ciseaux-electriques/",
-    "Pelles sur chenilles": "https://www.jcb.com/fr-FR/products/machines/pelles-sur-chenilles/",
-    "Pelles sur roues": "https://www.jcb.com/fr-FR/products/machines/wheeled-excavators/",
-    "Pothole Pro": "https://www.jcb.com/fr-FR/products/machines/pothole-pro/",
-    "Rouleaux vibrants tandem": "https://www.jcb.com/fr-FR/products/machines/vibratory-tandem-rollers/",
     "Télescopiques": "https://www.jcb.com/fr-FR/products/machines/telescopic/",
     "Télescopiques articulés": "https://www.jcb.com/fr-FR/products/machines/telescopic-articules/",
-    "Chariots élévateurs industriels": "https://www.jcb.com/fr-FR/products/machines/industrial-forklifts/",
     "Tracteurs": "https://www.jcb.com/fr-FR/products/machines/tracteurs/",
 }
 
