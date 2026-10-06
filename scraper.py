@@ -1257,6 +1257,241 @@ def scrape_monosem(page: Page, existing_keys: set) -> list[Machine]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Deutz-Fahr (deutz-fahr.com) & Same (same-tractors.com) — plateforme SDF Group
+# Le tableau de specs HTML de la fiche produit (SPA Vue.js) reste vide (aucune
+# requête réseau ni état embarqué, confirmé par sondage). En revanche certaines
+# fiches ont un PDF "brochure" téléchargeable (lien /media/*.pdf) avec de
+# vrais tableaux par modèle, au format "large" (une colonne = un modèle).
+# Pièges rencontrés (mêmes que Monosem) : en-tête à 2 lignes (groupe de
+# transmission + code modèle, nécessitant un forward-fill), tableaux
+# parasites en texte pivoté/illisible (ignorés car ils ne contiennent pas de
+# ligne d'en-tête reconnaissable), lignes de titre de section sans valeur
+# (ex. "MOTEUR") à ignorer. Couverture partielle : seules les fiches avec un
+# PDF brochure direct (pas Issuu, non exploitable) sont capturées.
+# ─────────────────────────────────────────────────────────────────────────────
+
+SDF_SITES = {
+    "Deutz-Fahr": "https://www.deutz-fahr.com/fr-fr",
+    "Same": "https://www.same-tractors.com/fr-fr",
+}
+
+
+def _sdf_product_links(page: Page, home: str) -> set:
+    """Ouvre le menu principal (nécessaire pour révéler toute la nav sur
+    cette SPA) et retourne les fiches modèle /tracteurs/<slug>."""
+    for sel in ["[class*='menu-toggle']", "[class*='hamburger']", "button[aria-label*='menu' i]", "nav button"]:
+        try:
+            btn = page.query_selector(sel)
+            if btn and btn.is_visible():
+                btn.click(force=True, timeout=3000)
+                page.wait_for_timeout(2000)
+                break
+        except Exception:
+            pass
+
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if u.netloc not in urlparse(home).netloc:
+            continue
+        parts = [p for p in u.path.split("/") if p]
+        if len(parts) >= 3 and parts[-2] == "tracteurs":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _sdf_brochure_pdf_url(page: Page) -> str | None:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    for href in hrefs:
+        if "/media/" in href and href.lower().split("?")[0].endswith(".pdf"):
+            return href
+    return None
+
+
+def _sdf_forward_fill(row: list) -> list:
+    """Remplit les None/vides d'une ligne d'en-tête avec la valeur précédente non vide."""
+    filled = []
+    last = None
+    for cell in row:
+        v = clean(cell)
+        if v:
+            last = v
+        filled.append(last)
+    return filled
+
+
+def _sdf_find_header_rows(table: list) -> tuple:
+    """Cherche la ligne d'en-tête contenant les codes modèle (jetons courts
+    alphanumériques dans les colonnes >= 1), et la ligne de groupe éventuelle
+    juste au-dessus (ex. type de transmission : Powershift / RVshift)."""
+
+    def short_token_count(row) -> int:
+        count = 0
+        for c in row[1:]:
+            v = clean(c)
+            if v and len(v) <= 15 and re.match(r"^[A-Za-zÀ-ÿ0-9][A-Za-zÀ-ÿ0-9 .+/-]*$", v):
+                count += 1
+        return count
+
+    best_idx, best_count = None, 0
+    for i in range(min(3, len(table))):
+        cnt = short_token_count(table[i])
+        if cnt > best_count:
+            best_count, best_idx = cnt, i
+    if best_idx is None or best_count < 2:
+        return None, None
+
+    group_idx = None
+    if best_idx > 0 and any(clean(c) for c in table[best_idx - 1][1:]):
+        group_idx = best_idx - 1
+    return group_idx, best_idx
+
+
+def _sdf_parse_spec_table(table: list) -> dict:
+    """Table "large" issue d'un PDF brochure : une colonne = un modèle (+
+    éventuellement un groupe de transmission sur la ligne au-dessus)."""
+    group_idx, model_idx = _sdf_find_header_rows(table)
+    if model_idx is None:
+        return {}
+
+    n_cols = max(len(r) for r in table)
+    normalized = [list(r) + [None] * (n_cols - len(r)) for r in table]
+    model_row = normalized[model_idx]
+    group_row = normalized[group_idx] if group_idx is not None else None
+    group_ff = _sdf_forward_fill(group_row) if group_row else None
+
+    variants = {}
+    for j in range(1, n_cols):
+        code = clean(model_row[j])
+        if not code:
+            continue
+        variants[j] = {"code": code, "group": clean(group_ff[j]) if group_ff else "", "specs": {}}
+    if not variants:
+        return {}
+
+    # Le libellé de groupe ne distingue les modèles que s'il existe plusieurs
+    # groupes différents (ex. "Powershift"/"RVshift") — sinon c'est juste un
+    # titre de page sans valeur discriminante (ex. "SÉRIE 6 TTV" partout).
+    distinct_groups = {d["group"] for d in variants.values() if d["group"]}
+    use_group = len(distinct_groups) > 1
+
+    data_start = (group_idx if group_idx is not None else model_idx) + (2 if group_idx is not None else 1)
+    for row in normalized[data_start:]:
+        label = clean(row[0])
+        if not label:
+            continue
+        if len(label) > 120:
+            # Texte pivoté/illisible détecté (cellule géante concaténée) :
+            # toute la table est suspecte, on l'abandonne.
+            return {}
+        if not any(clean(row[j]) for j in variants if j < len(row)):
+            continue  # titre de section sans valeur (ex. "MOTEUR", "CABINE")
+        for j, data in variants.items():
+            val = clean(row[j]) if j < len(row) else ""
+            if val:
+                data["specs"][label] = val
+
+    result = {}
+    for data in variants.values():
+        if not data["specs"]:
+            continue
+        variant = f"{data['group']} {data['code']}".strip() if use_group else data["code"]
+        result[variant] = data["specs"]
+    return result
+
+
+def _sdf_scrape_brand(page: Page, brand: str, home: str, existing_keys: set) -> list[Machine]:
+    machines = []
+    try:
+        page.goto(home, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+    except Exception as e:
+        log.warning(f"  {brand} inaccessible : {e}")
+        return machines
+
+    for sel in ["#onetrust-accept-btn-handler", "button:has-text('Accept')", "button:has-text('Accepter')"]:
+        try:
+            btn = page.query_selector(sel)
+            if btn:
+                btn.click(force=True, timeout=3000)
+                page.wait_for_timeout(1500)
+                break
+        except Exception:
+            pass
+
+    product_links = _sdf_product_links(page, home)
+    log.info(f"  {brand} → {len(product_links)} fiches modèles trouvées")
+    category = normaliser_categorie("tracteurs")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        pdf_url = _sdf_brochure_pdf_url(page)
+        if not pdf_url:
+            continue
+        try:
+            resp = requests.get(pdf_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"    PDF inaccessible {pdf_url} → {e}")
+            continue
+
+        range_name = re.split(r"\s*[|–-]\s*", clean(page.title()))[0].strip()
+
+        try:
+            with pdfplumber.open(BytesIO(resp.content)) as pdf:
+                page_tables = []
+                for pg in pdf.pages:
+                    page_tables.extend(pg.extract_tables())
+        except Exception as e:
+            log.warning(f"    Erreur lecture PDF {pdf_url} → {e}")
+            continue
+
+        seen_variants = set()
+        for table in page_tables:
+            variants = _sdf_parse_spec_table(table)
+            for variant, specs in variants.items():
+                if variant in seen_variants or not specs:
+                    continue
+                seen_variants.add(variant)
+                m = Machine()
+                m.brand = brand
+                m.range = range_name
+                m.name = range_name
+                m.variant = variant
+                m.category = category
+                m.sourceUrl = url
+                m.statut = "active"
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                key = f"{m.brand}|{m.name}|{m.variant}"
+                if key in existing_keys:
+                    continue
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {m.name} ({m.variant})")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    return machines
+
+
+def scrape_deutz_fahr(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les modèles Deutz-Fahr via les PDF brochure (couverture partielle)."""
+    return _sdf_scrape_brand(page, "Deutz-Fahr", SDF_SITES["Deutz-Fahr"], existing_keys)
+
+
+def scrape_same(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les modèles Same via les PDF brochure (couverture partielle)."""
+    return _sdf_scrape_brand(page, "Same", SDF_SITES["Same"], existing_keys)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # AVR — avrmachinery.com (matériel pomme de terre)
 # Structure : chaque fiche produit a un petit tableau clé/valeur (la première
 # ligne affiche juste le nom du modèle, sans clé).
@@ -3964,6 +4199,8 @@ def run() -> int:
             ("New Holland (newholland.com)", scrape_new_holland),
             ("Case IH (caseih.com)", scrape_case_ih),
             ("Monosem (monosem.com)", scrape_monosem),
+            ("Deutz-Fahr (deutz-fahr.com)", scrape_deutz_fahr),
+            ("Same (same-tractors.com)", scrape_same),
             ("AVR (avrmachinery.com)", scrape_avr),
             ("McHale (mchale.net)", scrape_mchale),
             ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
