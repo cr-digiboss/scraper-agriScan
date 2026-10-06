@@ -1,59 +1,72 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 6 : des PDF "brochure" téléchargeables ont été trouvés sur des fiches
-produit Deutz-Fahr et Same (ex. Serie_6_PS-RCS-TTV_FR.pdf, DORADO_Stage_V_FR.pdf,
-VIRTUS_Stage_V_FR.pdf). On les télécharge et on vérifie avec pdfplumber s'ils
-contiennent de vrais tableaux de specs exploitables (comme pour Monosem) ou
-si c'est juste du texte marketing / des images.
+Diagnostic : scrape_deutz_fahr() renvoie 0 machines même après ajout du
+scroll (alors que scrape_same() marche bien). On réutilise directement
+_sdf_product_links / _sdf_scrape_brand de scraper.py pour voir exactement
+quelles URLs sont collectées et pourquoi aucun PDF n'est détecté dessus.
 """
 
 import logging
-from io import BytesIO
 
-import pdfplumber
-import requests
+from playwright.sync_api import sync_playwright
+
+import scraper
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-PDFS = {
-    "Deutz-Fahr Série 6": "https://www.deutz-fahr.com/media/308.8924.2.4-0_Serie_6_PS-RCS-TTV_FR.pdf",
-    "Same Dorado": "https://www.same-tractors.com/media/308.8908.2.1-1_DORADO_Stage_V_FR_LOW.pdf",
-    "Same Virtus": "https://www.same-tractors.com/media/308.8905.2.1-1_VIRTUS_-_Stage_V_FR.pdf",
-}
-
 
 def main():
-    for name, url in PDFS.items():
-        log.info(f"\n{'='*70}\n{name} — {url}")
-        try:
-            resp = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-        except Exception as e:
-            log.warning(f"  Téléchargement échoué : {e}")
-            continue
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ))
 
-        log.info(f"  Taille : {len(resp.content)} octets")
+        home = scraper.SDF_SITES["Deutz-Fahr"]
+        page.goto(home, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(5000)
+        for sel in ["#onetrust-accept-btn-handler", "button:has-text('Accept')", "button:has-text('Accepter')"]:
+            try:
+                btn = page.query_selector(sel)
+                if btn:
+                    btn.click(force=True, timeout=3000)
+                    page.wait_for_timeout(1500)
+                    break
+            except Exception:
+                pass
 
-        try:
-            with pdfplumber.open(BytesIO(resp.content)) as pdf:
-                log.info(f"  {len(pdf.pages)} pages")
-                total_tables = 0
-                for i, pg in enumerate(pdf.pages):
-                    tables = pg.extract_tables()
-                    if tables:
-                        total_tables += len(tables)
-                        log.info(f"    page {i+1} : {len(tables)} table(s)")
-                        for t in tables:
-                            n_rows = len(t)
-                            n_cols = max(len(r) for r in t) if t else 0
-                            log.info(f"      {n_rows} lignes x {n_cols} colonnes")
-                            # Montrer les 3 premières lignes pour juger du contenu.
-                            for row in t[:3]:
-                                log.info(f"        {row}")
-                log.info(f"  TOTAL : {total_tables} tables trouvées dans ce PDF")
-        except Exception as e:
-            log.warning(f"  Erreur pdfplumber : {e}")
+        links = scraper._sdf_product_links(page, home)
+        log.info(f"{len(links)} liens collectés :")
+        for u in sorted(links):
+            log.info(f"  {u}")
+
+        # Inspecter les 3 premiers en détail : cookie banner toujours là ?
+        # lien PDF présent sous un autre format ?
+        for url in sorted(links)[:3]:
+            log.info(f"\n{'='*70}\n{url}")
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+            for _ in range(8):
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(300)
+
+            cookie_still_there = page.query_selector("#onetrust-banner-sdk")
+            log.info(f"  Bandeau cookies encore présent : {bool(cookie_still_there)}")
+
+            all_hrefs = page.eval_on_selector_all(
+                "a[href]",
+                "els => els.map(e => ({href: e.href, text: e.innerText.trim()}))"
+            )
+            pdf_like = [h for h in all_hrefs if ".pdf" in h["href"].lower() or "brochure" in h["text"].lower() or "télécharg" in h["text"].lower()]
+            log.info(f"  {len(all_hrefs)} liens au total, {len(pdf_like)} PDF/brochure-like :")
+            for h in pdf_like:
+                log.info(f"    {h}")
+
+            log.info(f"  Titre de la page : {page.title()!r}")
+
+        browser.close()
 
 
 if __name__ == "__main__":

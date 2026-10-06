@@ -1457,7 +1457,7 @@ def _sdf_scrape_brand(page: Page, brand: str, home: str, existing_keys: set) -> 
         # Le titre de page peut être une phrase marketing complète (ex.
         # "SAME Dorado Natural, tracteur puissant le plus polyvalent...") :
         # on tronque à la première virgule/deux-points/barre verticale.
-        range_name = re.split(r"\s*[|–,:]\s*", clean(page.title()))[0].strip()
+        range_name = re.split(r"\s+[-–]\s+|[|,:]", clean(page.title()))[0].strip()
 
         try:
             with pdfplumber.open(BytesIO(resp.content)) as pdf:
