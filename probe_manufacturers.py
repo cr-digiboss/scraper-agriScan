@@ -1,11 +1,10 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-Round 4 : aucun PDF/catalogue sur les accueils (Deutz-Fahr : rien du tout ;
-Same : un catalogue Issuu mais basé sur des images, sans texte extractible
-ni bouton de téléchargement). Les PDF techniques sont généralement liés
-depuis les FICHES PRODUIT, pas l'accueil. On ouvre le menu principal pour
-trouver une vraie page catégorie "tracteurs", puis on inspecte une fiche
-produit individuelle à la recherche d'un bouton brochure/fiche technique.
+Round 5 : on a maintenant de vraies pages produit (via le menu ouvert) :
+- Deutz-Fahr : /fr-fr/tracteurs/serie-6, serie-7-ttv, serie-8, serie-9-stage-5
+- Same : /fr-fr/tracteurs/dorado, frutteto, krypton, virtus
+On inspecte ces fiches produit : présence de <table>, de liens PDF, et de
+boutons "brochure"/"fiche technique"/"télécharger".
 """
 
 import logging
@@ -20,10 +19,12 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-SITES = {
-    "Deutz-Fahr": "https://www.deutz-fahr.com/fr-fr",
-    "Same": "https://www.same-tractors.com/fr-fr",
-}
+URLS = [
+    "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-6",
+    "https://www.deutz-fahr.com/fr-fr/tracteurs/serie-9-stage-5",
+    "https://www.same-tractors.com/fr-fr/tracteurs/dorado",
+    "https://www.same-tractors.com/fr-fr/tracteurs/virtus",
+]
 
 
 def accept_cookies(page):
@@ -43,52 +44,47 @@ def main():
         browser = p.chromium.launch()
         page = browser.new_page(user_agent=UA)
 
-        for brand, home in SITES.items():
-            log.info(f"\n{'='*70}\n{brand} — {home}")
+        for url in URLS:
+            log.info(f"\n{'='*70}\n{url}")
             try:
-                page.goto(home, timeout=30000, wait_until="domcontentloaded")
-                page.wait_for_timeout(5000)
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(4000)
             except Exception as e:
-                log.warning(f"  Accueil inaccessible : {e}")
+                log.warning(f"  Inaccessible : {e}")
                 continue
             accept_cookies(page)
             page.wait_for_timeout(2000)
+            for _ in range(8):
+                page.mouse.wheel(0, 1200)
+                page.wait_for_timeout(300)
 
-            # Chercher et cliquer sur le bouton menu principal (hamburger ou nav).
-            menu_info = page.evaluate(
-                """
-                () => {
-                    const keywords = ['menu', 'nav-toggle', 'hamburger', 'burger'];
-                    const found = {};
-                    keywords.forEach(k => {
-                        const els = document.querySelectorAll(`[class*="${k}"], [id*="${k}"]`);
-                        if (els.length) found[k] = els.length;
-                    });
-                    return found;
-                }
-                """
+            tables = page.query_selector_all("table")
+            log.info(f"  {len(tables)} tables sur la page")
+
+            hrefs = page.eval_on_selector_all(
+                "a[href]",
+                "els => els.map(e => ({href: e.href, text: e.innerText.trim()}))"
             )
-            log.info(f"  Éléments menu potentiels : {menu_info}")
+            pdf_links = [h for h in hrefs if h["href"].lower().split("?")[0].endswith(".pdf")]
+            log.info(f"  PDF trouvés : {len(pdf_links)}")
+            for p_ in pdf_links:
+                log.info(f"    {p_}")
 
-            for sel in ["[class*='menu-toggle']", "[class*='hamburger']", "button[aria-label*='menu' i]", "nav button"]:
-                try:
-                    btn = page.query_selector(sel)
-                    if btn and btn.is_visible():
-                        btn.click(force=True, timeout=3000)
-                        log.info(f"  Menu ouvert via {sel!r}")
-                        page.wait_for_timeout(2000)
-                        break
-                except Exception:
-                    pass
+            brochure_candidates = [
+                h for h in hrefs
+                if any(k in h["text"].lower() for k in ["brochure", "fiche technique", "télécharger", "download", "catalogue", "pdf"])
+            ]
+            log.info(f"  Boutons/liens 'brochure'-like : {len(brochure_candidates)}")
+            for b in brochure_candidates:
+                log.info(f"    {b}")
 
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            uniq = sorted(set(hrefs))
-            log.info(f"  {len(uniq)} liens après tentative d'ouverture du menu")
-            # Chercher spécifiquement des mots clés de catégories produit.
-            cat_kw = ["tracteur", "tractor", "moissonneuse", "produit", "product", "range", "gamme"]
-            cat_links = [h for h in uniq if any(k in h.lower() for k in cat_kw)]
-            for u in cat_links:
-                log.info(f"    {u}")
+            # Boutons qui ne sont pas des <a> (ex: déclenchent un téléchargement en JS).
+            btn_candidates = page.eval_on_selector_all(
+                "button, [role='button']",
+                "els => els.map(e => e.innerText.trim()).filter(t => t.length > 0 && t.length < 60)"
+            )
+            interesting_btns = [b for b in btn_candidates if any(k in b.lower() for k in ["brochure", "fiche", "télécharg", "download", "catalogue", "pdf"])]
+            log.info(f"  Boutons JS 'brochure'-like : {interesting_btns}")
 
         browser.close()
 
