@@ -26,15 +26,15 @@ def main():
     cur = conn.cursor()
 
     cur.execute(
-        """SELECT name, variant FROM "Machine" WHERE brand = 'Same' AND (name, variant) = ANY(%s)""",
-        ([(n, v) for n, v in STALE],),
+        """SELECT name, variant FROM "Machine" WHERE brand = 'Same' AND name = %s AND variant = %s""",
+        STALE[0],
     )
     found = cur.fetchall()
     log.info(f"{len(found)} lignes trouvées à supprimer : {found}")
 
     cur.execute(
-        """DELETE FROM "Machine" WHERE brand = 'Same' AND (name, variant) = ANY(%s)""",
-        ([(n, v) for n, v in STALE],),
+        """DELETE FROM "Machine" WHERE brand = 'Same' AND name = %s AND variant = %s""",
+        STALE[0],
     )
     log.info(f"Neon : {cur.rowcount} lignes supprimées")
     conn.commit()
