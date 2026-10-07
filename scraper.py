@@ -1341,6 +1341,14 @@ def _sdf_find_header_rows(table: list) -> tuple:
 
     best_idx, best_count = None, 0
     for i in range(min(3, len(table))):
+        # Une vraie ligne de codes modèle n'a jamais de libellé d'attribut en
+        # colonne 0 (cette colonne est réservée au nom de l'attribut sur les
+        # lignes de données) — sans ce filtre, une ligne de données comme
+        # ['Avec pneus avant', 'Taille', '300/70 R20'] peut être prise pour
+        # une ligne d'en-tête (ex. tableau "un modèle par table" où le vrai
+        # nom du modèle, trop long, ne passe pas le test de jeton court).
+        if table[i] and clean(table[i][0]):
+            continue
         cnt = short_token_count(table[i])
         if cnt > best_count:
             best_count, best_idx = cnt, i
