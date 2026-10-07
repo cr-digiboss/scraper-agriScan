@@ -17,9 +17,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: playwright install --with-deps chromium
 
-      - run: python cleanup_spec_as_machine.py
+      - run: python probe_manufacturers.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          QDRANT_URL: ${{ secrets.QDRANT_URL }}
-          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
-          QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
