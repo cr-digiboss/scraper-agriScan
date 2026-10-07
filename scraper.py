@@ -331,6 +331,50 @@ def _kverneland_product_links(page: Page) -> set:
     return links
 
 
+def _kverneland_parse_tables(tables) -> list:
+    """Retourne une liste de (nom_modele, specs) à partir des tables d'une
+    fiche produit Kverneland. Deux formats rencontrés :
+    - clé/valeur classique (2 colonnes, une ligne par attribut, avec souvent
+      une clé "Model" donnant le nom du modèle) ;
+    - "une ligne par modèle" (une colonne "Model" en tête, les colonnes
+      suivantes sont les attributs, une ligne par modèle de la gamme —
+      ex. tableaux de comparaison des tailles d'une mélangeuse). Sans cette
+      distinction, la ligne d'en-tête de ce 2e format est prise pour une
+      paire clé/valeur ("Model" → le libellé du 1er attribut), et aucun des
+      modèles de la gamme n'est capturé individuellement.
+    """
+    results = []
+    kv_specs = {}
+    for table in tables:
+        rows = table.query_selector_all("tr")
+        if not rows:
+            continue
+        header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+        if header and header[0].lower() == "model" and len(header) > 2:
+            for row in rows[1:]:
+                values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
+                if len(values) < 2 or not values[0]:
+                    continue
+                specs = {
+                    header[j]: values[j]
+                    for j in range(1, min(len(header), len(values)))
+                    if values[j]
+                }
+                if specs:
+                    results.append((values[0], specs))
+        else:
+            for row in rows:
+                cells = row.query_selector_all("td, th")
+                if len(cells) >= 2:
+                    k = clean(cells[0].inner_text())
+                    v = clean(cells[1].inner_text())
+                    if k and v:
+                        kv_specs[k] = v
+    if kv_specs:
+        results.append((kv_specs.pop("Model", ""), kv_specs))
+    return results
+
+
 def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
     """Scrape les fiches modèles Kverneland non encore présentes dans Neon."""
     machines = []
@@ -352,42 +396,36 @@ def scrape_kverneland(page: Page, existing_keys: set) -> list[Machine]:
             log.warning(f"    Erreur {url} → {e}")
             continue
 
-        specs = {}
-        for table in page.query_selector_all("table"):
-            for row in table.query_selector_all("tr"):
-                cells = row.query_selector_all("td, th")
-                if len(cells) >= 2:
-                    k = clean(cells[0].inner_text())
-                    v = clean(cells[1].inner_text())
-                    if k and v:
-                        specs[k] = v
-
-        if not specs:
+        model_specs = _kverneland_parse_tables(page.query_selector_all("table"))
+        if not model_specs:
             continue
 
         segments = [s for s in urlparse(url).path.split("/") if s]
         category_slug, subcategory_slug = segments[0], segments[1]
+        page_title = _clean_kverneland_title(page.title())
 
-        m = Machine()
-        m.brand = "Kverneland"
-        m.name = specs.pop("Model", "") or _clean_kverneland_title(page.title())
-        m.category = normaliser_categorie(category_slug, subcategory_slug, m.name)
-        m.subcategory = _humanize_slug(subcategory_slug)
-        m.sourceUrl = url
-        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
-        # Catalogue constructeur actuel : tout ce qu'on y trouve est en vente aujourd'hui
-        m.statut = "active"
+        for name, specs in model_specs:
+            m = Machine()
+            m.brand = "Kverneland"
+            m.name = name or page_title
+            m.category = normaliser_categorie(category_slug, subcategory_slug, m.name)
+            m.subcategory = _humanize_slug(subcategory_slug)
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            # Catalogue constructeur actuel : tout ce qu'on y trouve est en vente aujourd'hui
+            m.statut = "active"
 
-        if not m.name or len(m.name) < 2:
-            continue
+            if not m.name or len(m.name) < 2:
+                continue
 
-        key = f"{m.brand}|{m.name}|{m.variant}"
-        if key in existing_keys:
-            continue
+            key = f"{m.brand}|{m.name}|{m.variant}"
+            if key in existing_keys:
+                continue
 
-        machines.append(m)
-        existing_keys.add(key)
-        log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {m.name}")
+
         time.sleep(random.uniform(1.0, 2.0))
 
     return machines
