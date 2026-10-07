@@ -1,95 +1,49 @@
 """
 Script de sondage temporaire — à supprimer après usage.
-L'utilisateur signale "Capacity (m³)" — un libellé d'attribut + unité entre
-parenthèses pris pour un nom de machine, variante du bug déjà corrigé (mot
-générique seul). On élargit la détection : un name/variant qui est un mot
-générique suivi d'une unité entre parenthèses, ou qui contient une unité
-entre parenthèses alors qu'il n'y a pas de chiffre ailleurs dans la valeur
-(signe que c'est un libellé de colonne et pas un vrai modèle/variante).
+[Kverneland] 'Capacity (m³)' a été pris pour un nom de modèle sur la fiche
+selfline-4.0-compact : la clé "Model" du scraper générique clé/valeur
+(cells[0]=clé, cells[1]=valeur) a stocké "Capacity (m³)" comme valeur.
+On inspecte la table brute pour comprendre : table à 3 colonnes (clé |
+sous-libellé | valeur) au lieu de 2 ?
 """
 
 import logging
-import os
-import re
 
-import psycopg2
+from playwright.sync_api import sync_playwright
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("probe")
 
-# Mots génériques (étendus) qui ne sont jamais un vrai nom de modèle/variante,
-# avec ou sans unité entre parenthèses à la suite.
-SUSPECT_WORDS = {
-    "taille", "couleur", "poids", "largeur", "hauteur", "longueur",
-    "capacité", "capacite", "capacity", "modèle", "modele", "model",
-    "type", "puissance", "power", "vitesse", "speed", "diamètre",
-    "diametre", "diameter", "pression", "pressure", "volume", "débit",
-    "debit", "flow", "profondeur", "depth", "epaisseur", "épaisseur",
-    "thickness", "unité", "unite", "unit", "norme", "standard", "série",
-    "serie", "series", "range", "gamme", "référence", "reference", "code",
-    "désignation", "designation", "value", "valeur", "min", "max", "mini",
-    "maxi", "nombre", "number", "quantité", "quantite", "quantity",
-    "dimension", "dimensions", "width", "height", "length", "weight",
-    "color", "colour", "size",
-}
-
-
-def strip_parenthetical_unit(value: str) -> str:
-    """Retire un suffixe entre parenthèses (ex. '(m³)', '(mm)') pour isoler
-    le libellé de base."""
-    return re.sub(r"\s*\([^)]*\)\s*$", "", value).strip()
-
-
-def is_suspect(value: str) -> bool:
-    v = value.strip().lower().rstrip(".")
-    if not v:
-        return False
-    if v in SUSPECT_WORDS:
-        return True
-    base = strip_parenthetical_unit(v)
-    if base and base != v and base in SUSPECT_WORDS:
-        return True
-    return False
+URLS = [
+    "https://ien.kverneland.com/bale-choppers/mixer-feeders/selfline-4.0-compact",
+    "https://ien.kverneland.com/bale-choppers/mixer-feeders/siloking-selfline-4.0-premium",
+]
 
 
 def main():
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    cur = conn.cursor()
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ))
 
-    cur.execute(
-        """SELECT brand, name, variant, "sourceUrl" FROM "Machine" ORDER BY brand, name, variant"""
-    )
-    rows = cur.fetchall()
-    log.info(f"{len(rows)} lignes au total dans Neon\n")
+        for url in URLS:
+            log.info(f"\n{'='*70}\n{url}")
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
 
-    suspects = []
-    for brand, name, variant, source_url in rows:
-        if is_suspect(name) or is_suspect(variant):
-            suspects.append((brand, name, variant, source_url))
+            tables = page.query_selector_all("table")
+            log.info(f"  {len(tables)} tables sur la page")
+            for ti, table in enumerate(tables):
+                rows = table.query_selector_all("tr")
+                log.info(f"  table {ti} : {len(rows)} lignes")
+                for row in rows[:15]:
+                    cells = row.query_selector_all("td, th")
+                    texts = [c.inner_text().strip()[:40] for c in cells]
+                    log.info(f"    {len(cells)} cols: {texts}")
 
-    log.info(f"{len(suspects)} lignes suspectes :\n")
-    for brand, name, variant, source_url in suspects:
-        log.info(f"  [{brand}] {name!r} / {variant!r} — {source_url}")
-
-    log.info("\n--- Détail des sourceUrl des entrées suspectes ---")
-    seen_urls = set()
-    for _, _, _, source_url in suspects:
-        if source_url in seen_urls:
-            continue
-        seen_urls.add(source_url)
-        cur.execute(
-            """SELECT brand, name, variant FROM "Machine" WHERE "sourceUrl" = %s ORDER BY name""",
-            (source_url,),
-        )
-        family = cur.fetchall()
-        log.info(f"\n{source_url} → {len(family)} lignes :")
-        for brand, name, variant in family:
-            log.info(f"  [{brand}] {name!r} / {variant!r}")
-
-    log.info(f"\n=== TOTAL SUSPECTS : {len(suspects)} ===")
-
-    cur.close()
-    conn.close()
+        browser.close()
 
 
 if __name__ == "__main__":
