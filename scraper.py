@@ -350,7 +350,14 @@ def _kverneland_parse_tables(tables) -> list:
         if not rows:
             continue
         header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
-        if header and header[0].lower() == "model" and len(header) > 2:
+        # Au moins 2 colonnes d'attribut non vides après "Model" : sinon ce
+        # n'est pas une comparaison multi-modèles mais une fiche à un seul
+        # modèle dont la table a juste une colonne vide en trop (ex.
+        # ['Model', 'Onyx 2030', ''] — une seule valeur réelle, pas une
+        # liste d'attributs). Sans ce filtre, chaque ligne d'attribut de ces
+        # fiches était prise pour un modèle distinct.
+        non_empty_header = [h for h in header[1:] if h]
+        if header and header[0].lower() == "model" and len(non_empty_header) > 1:
             for row in rows[1:]:
                 values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
                 if len(values) < 2 or not values[0]:
