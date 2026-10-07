@@ -33,7 +33,7 @@ SUSPECT_WORDS = {
 def is_suspect(value: str) -> bool:
     v = value.strip().lower().rstrip(".")
     if not v:
-        return True
+        return False  # variante vide = normal (pas de variante pour cette machine)
     if v in SUSPECT_WORDS:
         return True
     return False
@@ -57,6 +57,8 @@ def main():
     log.info(f"{len(suspects)} lignes suspectes (name/variant = mot générique d'unité/attribut) :\n")
     for brand, name, variant, source_url in suspects:
         log.info(f"  [{brand}] {name!r} / {variant!r} — {source_url}")
+
+    log.info(f"\n=== TOTAL SUSPECTS : {len(suspects)} ===")
 
     cur.close()
     conn.close()
