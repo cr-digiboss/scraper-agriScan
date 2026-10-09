@@ -8,7 +8,9 @@ TEST_URLS = [
     "https://ien.kverneland.com/tillage-tools/subsoilers/kverneland-dtx",
     "https://ien.kverneland.com/seeders/pneumatic-mounted-seed-drills/e-drill-maxi-plus",
     # multi-modeles reel : doit toujours donner plusieurs machines distinctes
-    "https://ien.kverneland.com/feeding/mixer-feeders/kverneland-compact",
+    "https://ien.kverneland.com/bale-choppers/mixer-feeders/siloking-trailedline-classic-compact",
+    "https://ien.kverneland.com/bale-choppers/mixer-feeders/siloking-trailedline-4.0-compact",
+    "https://ien.kverneland.com/bale-choppers/mixer-feeders/selfline-4.0-compact",
 ]
 
 scraper._kverneland_product_links = lambda page: set(TEST_URLS)
