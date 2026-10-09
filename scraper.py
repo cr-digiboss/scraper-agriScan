@@ -4683,9 +4683,11 @@ def _rauch_product_links(page: Page) -> set:
 
 def _rauch_find_value_table(tables):
     """Repère le tableau de specs principal : en-tête d'au moins 3
-    colonnes (libellé + ≥ 2 variantes) et, parmi ces candidats, celui
-    avec le plus de lignes (élimine les tableaux d'options décoratifs de
-    même forme mais beaucoup plus courts)."""
+    colonnes (libellé + ≥ 2 variantes) avec la cellule 0 vide ou
+    "MODEL VARIANT". Les tableaux d'options décoratifs de même forme
+    (ex. "Hopper extension", "Ejection discs") ont au contraire un vrai
+    libellé de catégorie en cellule 0, ce qui les exclut. Parmi les
+    candidats restants, on garde celui avec le plus de lignes."""
     best = None
     best_rows = -1
     for idx, t in enumerate(tables):
@@ -4694,6 +4696,8 @@ def _rauch_find_value_table(tables):
             continue
         header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
         if len(header) < 3 or sum(1 for h in header[1:] if h) < 1:
+            continue
+        if header[0] and header[0].upper() != "MODEL VARIANT":
             continue
         if len(rows) > best_rows:
             best_rows = len(rows)
