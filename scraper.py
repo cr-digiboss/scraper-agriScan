@@ -4502,6 +4502,14 @@ def scrape_agrisem(page: Page, existing_keys: set) -> list[Machine]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 EINBOECK_HOME = "https://www.einboeck.at/produkte/"
+# Les mots-clés de normaliser_categorie sont en anglais/français : les slugs
+# allemands d'Einböck n'y correspondent jamais, d'où ce mapping explicite.
+EINBOECK_CATEGORIES = {
+    "ackerkulturpflege": "Bineuses",
+    "aussaat-duengung": "Semoirs",
+    "bodenbearbeitung": "Travail du sol",
+    "gruenlandpflege": "Fenaison",
+}
 
 
 def _einboeck_product_links(page: Page) -> set:
@@ -4603,11 +4611,18 @@ def scrape_einboeck(page: Page, existing_keys: set) -> list[Machine]:
             continue
 
         segs = [s for s in urlparse(url).path.split("/") if s]
-        category = normaliser_categorie(segs[1] if len(segs) > 1 else "", url)
+        category = EINBOECK_CATEGORIES.get(segs[1] if len(segs) > 1 else "", "Autre")
+
+        # Nom de base de la gamme (ex. "Chopstar Hill") : certaines tables
+        # PDF ne donnent qu'un code de taille en colonne "Type" (ex. "70"),
+        # pas le nom complet du modèle — on le préfixe dans ce cas.
+        base_name = clean(page.title()).split("-")[0].split("|")[0].strip()
 
         for name, specs in model_specs:
             if not name or len(name) < 2:
                 continue
+            if base_name and base_name.lower() not in name.lower():
+                name = f"{base_name} {name}"
             key = f"Einböck|{name}|"
             if key in existing_keys:
                 continue
