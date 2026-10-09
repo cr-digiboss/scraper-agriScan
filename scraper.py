@@ -411,7 +411,13 @@ def _kverneland_parse_tables(tables) -> list:
                     v = clean(cells[1].inner_text())
                     if k and v:
                         kv_specs[k] = v
-    if kv_specs:
+    # Le filet clé/valeur global n'est utilisé que si aucune autre table de
+    # la page n'a produit de résultat structuré (modèle unique, sans
+    # tableau "Model"). Dès qu'un vrai modèle a été identifié ailleurs sur
+    # la page, une table annexe sans en-tête "Model" (ex. un comparatif de
+    # ressorts) ne doit pas générer une fiche fantôme supplémentaire nommée
+    # d'après le titre de la page.
+    if kv_specs and not results:
         results.append((kv_specs.pop("Model", ""), kv_specs))
     return results
 
