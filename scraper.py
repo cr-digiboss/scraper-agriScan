@@ -4248,6 +4248,140 @@ def scrape_bogballe(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Niubo — niubo.info (broyeurs/débroussailleuses agricoles, Espagne)
+# Fiche produit = 1 table dont la ligne d'en-tête n'a pas de texte, juste une
+# icône par colonne (ex. icon-ancho-trabajo.png = largeur de travail) ; la
+# ligne suivante ne donne que l'unité (MM, KG, Nº...), répétée sur plusieurs
+# colonnes et donc inutilisable seule pour distinguer les attributs. On tire
+# le vrai libellé du nom de fichier de l'icône via une table de traduction
+# fermée (constatée sur plusieurs fiches de la catégorie "desbrozadoras").
+# Chaque ligne de données suivante est un modèle distinct de la gamme.
+# ─────────────────────────────────────────────────────────────────────────────
+
+NIUBO_HOME = "https://niubo.info/"
+NIUBO_CATEGORIES = [
+    "https://niubo.info/categoria_maquina/agricola/brazos-desbrozadores-2/",
+    "https://niubo.info/categoria_maquina/agricola/desbrozadoras-categoria/",
+    "https://niubo.info/categoria_maquina/agricola/elevadores/",
+    "https://niubo.info/categoria_maquina/agricola/equipos-ecosostenibles/",
+    "https://niubo.info/categoria_maquina/agricola/prepodadoras-barredoras/",
+    "https://niubo.info/categoria_maquina/agricola/trituradoras/",
+]
+
+NIUBO_ICON_LABELS = {
+    "icon-ancho-trabajo": "Largeur de travail (mm)",
+    "icon-peso": "Poids (kg)",
+    "icon-cuchilla1": "Nombre de couteaux",
+    "icon-cadenas": "Nombre de chaînes",
+    "icon-cv": "Puissance requise (ch)",
+    "icon-rpm": "Régime PDF (tr/min)",
+    "icon-a": "Dimension A (mm)",
+    "icon-b": "Dimension B (mm)",
+    "icon-c": "Dimension C (mm)",
+}
+
+
+def _niubo_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "niubo.info" not in u.netloc:
+            continue
+        if "/maquina/" in u.path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _niubo_parse_table(table) -> dict:
+    """Retourne {nom_modele: {attribut: valeur}} à partir de la table d'une
+    fiche produit (en-tête par icônes, 1 ligne d'unités, puis 1 ligne par
+    modèle de la gamme)."""
+    rows = table.query_selector_all("tr")
+    if len(rows) < 3:
+        return {}
+
+    labels = []
+    for cell in rows[0].query_selector_all("td, th"):
+        img = cell.query_selector("img")
+        if not img:
+            labels.append("")
+            continue
+        src = img.get_attribute("src") or ""
+        stem = src.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        labels.append(NIUBO_ICON_LABELS.get(stem, ""))
+
+    model_specs: dict = {}
+    for row in rows[2:]:
+        values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
+        if len(values) < 2 or not values[0]:
+            continue
+        specs = {
+            labels[j]: values[j]
+            for j in range(1, min(len(labels), len(values)))
+            if labels[j] and values[j]
+        }
+        if specs:
+            model_specs[values[0]] = specs
+    return model_specs
+
+
+def scrape_niubo(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Niubo non encore présentes dans Neon."""
+    machines = []
+
+    for category_url in NIUBO_CATEGORIES:
+        category_slug = category_url.rstrip("/").split("/")[-1]
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Niubo ({category_slug}) inaccessible : {e}")
+            continue
+
+        product_links = _niubo_product_links(page)
+        log.info(f"  Niubo ({category_slug}) → {len(product_links)} fiches modèles trouvées")
+        category = normaliser_categorie(category_slug)
+
+        for i, url in enumerate(sorted(product_links), 1):
+            try:
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(2500)
+            except Exception as e:
+                log.warning(f"    Erreur {url} → {e}")
+                continue
+
+            tables = page.query_selector_all("table")
+            if not tables:
+                continue
+
+            model_specs = _niubo_parse_table(tables[0])
+            if not model_specs:
+                continue
+
+            for name, specs in model_specs.items():
+                key = f"Niubo|{name}|"
+                if key in existing_keys:
+                    continue
+
+                m = Machine()
+                m.brand = "Niubo"
+                m.name = name
+                m.category = category
+                m.sourceUrl = url
+                m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+                m.statut = "active"
+                machines.append(m)
+                existing_keys.add(key)
+                log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+            time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Niubo → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -4329,6 +4463,7 @@ def run() -> int:
             ("Ropa (ropa-maschinenbau.de)", scrape_ropa),
             ("Samson (samson-agro.com)", scrape_samson),
             ("Bogballe (bogballe.com)", scrape_bogballe),
+            ("Niubo (niubo.info)", scrape_niubo),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
