@@ -5,18 +5,18 @@ from playwright.sync_api import sync_playwright
 
 BRANDS = {
     "amazone": {
-        "home": "https://www.amazone.net/en/products",
-        "known": "https://www.amazone.net/en/products/sprayers/pantera",
-        "root": "amazone.net",
+        "home": "https://www.amazone.de/en/",
+        "known": "https://www.amazone.de/en/products/mounted-sprayers/ux-5201-27201",
+        "root": "amazone.de",
     },
     "lely": {
-        "home": "https://www.lely.com/en/products/",
-        "known": "https://www.lely.com/en/products/feeding/lely-vector/",
+        "home": "https://www.lely.com/row/products/",
+        "known": "https://www.lely.com/row/products/milking/vector/",
         "root": "lely.com",
     },
     "rauch": {
-        "home": "https://www.rauch.de/en/products/",
-        "known": "https://www.rauch.de/en/products/fertilizer-spreaders/axis/",
+        "home": "https://rauch.de/en/fertiliser-spreader.html",
+        "known": "https://rauch.de/en/fertiliser-spreaders/disc-spreader/axis-m.html",
         "root": "rauch.de",
     },
 }
