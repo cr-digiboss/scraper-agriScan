@@ -17,4 +17,6 @@ jobs:
 
       - run: playwright install --with-deps chromium
 
-      - run: python probe_lot5.py
+      - run: python validate_rauch.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}

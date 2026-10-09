@@ -4646,6 +4646,130 @@ def scrape_einboeck(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Rauch — rauch.de (épandeurs d'engrais)
+# Fiche produit = 3 tables HTML :
+#   table 0 : nom de variante + description marketing (inutile)
+#   table 1 : ligne 0 = en-tête avec un nom de variante par colonne,
+#             lignes suivantes = valeurs (même index de ligne que table 2)
+#   table 2 : une colonne, une ligne par libellé d'attribut (même ordre
+#             que les lignes de valeurs de la table 1)
+# Les deux tables de specs sont donc à combiner par index de ligne plutôt
+# que par une table unique classique.
+# ─────────────────────────────────────────────────────────────────────────────
+
+RAUCH_CATEGORIES = {
+    "https://rauch.de/en/fertiliser-spreaders/disc-spreader.html": "Épandeurs",
+    "https://rauch.de/en/fertiliser-spreaders/pneumatic-spreader.html": "Épandeurs",
+    "https://rauch.de/en/fertiliser-spreader/box-spreader.html": "Épandeurs",
+}
+
+
+def _rauch_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "rauch.de" not in u.netloc:
+            continue
+        path = u.path
+        if "/fertiliser-spreader" in path and path.endswith(".html") and not path.endswith("spreader.html"):
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _rauch_parse_spec_tables(tables) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir des tables 1 et 2
+    de la fiche produit (cf. commentaire ci-dessus)."""
+    if len(tables) < 3:
+        return {}
+
+    value_rows = tables[1].query_selector_all("tr")
+    label_rows = tables[2].query_selector_all("tr")
+    if len(value_rows) < 2 or len(label_rows) < 2:
+        return {}
+
+    header = [clean(c.inner_text()) for c in value_rows[0].query_selector_all("td, th")]
+    variants = header[1:]
+    if not variants:
+        return {}
+
+    model_specs: dict = {v: {} for v in variants if v}
+    n = min(len(value_rows), len(label_rows))
+    for i in range(1, n):
+        label_cells = label_rows[i].query_selector_all("td, th")
+        attr = clean(label_cells[0].inner_text()) if label_cells else ""
+        if not attr:
+            continue
+        values = [clean(c.inner_text()) for c in value_rows[i].query_selector_all("td, th")]
+        for j, variant in enumerate(variants, start=1):
+            if variant not in model_specs:
+                continue
+            if j < len(values) and values[j]:
+                model_specs[variant][attr] = values[j]
+
+    return {v: specs for v, specs in model_specs.items() if specs}
+
+
+def scrape_rauch(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Rauch non encore présentes dans Neon."""
+    machines = []
+    product_links: set = set()
+
+    for category_url, _category in RAUCH_CATEGORIES.items():
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Rauch ({category_url}) inaccessible : {e}")
+            continue
+        found = _rauch_product_links(page)
+        log.info(f"  Rauch ({category_url.rstrip('/').split('/')[-1]}) → {len(found)} liens trouvés")
+        product_links |= found
+
+    log.info(f"  Rauch → {len(product_links)} fiches modèles au total")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        model_specs = _rauch_parse_spec_tables(tables)
+        if not model_specs:
+            continue
+
+        category = normaliser_categorie(page.title(), url) or "Épandeurs"
+
+        for variant, specs in model_specs.items():
+            name = clean(variant.replace("|", " "))
+            name = re.sub(r"\s+", " ", name).strip()
+            if not name or len(name) < 2:
+                continue
+            key = f"Rauch|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Rauch"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Rauch → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -4730,6 +4854,7 @@ def run() -> int:
             ("Niubo (niubo.info)", scrape_niubo),
             ("Agrisem (agrisem.com)", scrape_agrisem),
             ("Einböck (einboeck.at)", scrape_einboeck),
+            ("Rauch (rauch.de)", scrape_rauch),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
