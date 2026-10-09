@@ -333,15 +333,23 @@ def _kverneland_product_links(page: Page) -> set:
 
 def _kverneland_parse_tables(tables) -> list:
     """Retourne une liste de (nom_modele, specs) à partir des tables d'une
-    fiche produit Kverneland. Deux formats rencontrés :
-    - clé/valeur classique (2 colonnes, une ligne par attribut, avec souvent
-      une clé "Model" donnant le nom du modèle) ;
-    - "une ligne par modèle" (une colonne "Model" en tête, les colonnes
+    fiche produit Kverneland. Trois formats rencontrés :
+    - clé/valeur classique (2 colonnes, une ligne par attribut) ;
+    - "une ligne par modèle" (colonne "Model" en tête, les colonnes
       suivantes sont les attributs, une ligne par modèle de la gamme —
-      ex. tableaux de comparaison des tailles d'une mélangeuse). Sans cette
-      distinction, la ligne d'en-tête de ce 2e format est prise pour une
-      paire clé/valeur ("Model" → le libellé du 1er attribut), et aucun des
-      modèles de la gamme n'est capturé individuellement.
+      ex. tableaux de comparaison des tailles d'une mélangeuse) ;
+    - "transposée" (colonne "Model" en tête mais c'est l'inverse : les
+      colonnes suivantes sont les modèles/variantes, et chaque ligne est un
+      attribut commun — ex. ['Model', 'Actiroll', 'Actiroll Classic'] puis
+      des lignes ['Working width (m)', '9.50', '6.30'], ou un seul modèle
+      répété sur plusieurs colonnes de variantes comme
+      ['Model', 'Optima R', 'Optima R', ...]).
+    On distingue "une ligne par modèle" de "transposée" par la forme de la
+    table : une vraie gamme de modèles tient dans peu de lignes (une par
+    taille/variante), alors qu'une table transposée a plus de lignes
+    (une par attribut) que de colonnes de modèles. Sans cette distinction,
+    une table transposée est lue à l'envers et chaque ligne d'attribut est
+    prise pour un modèle distinct.
     """
     results = []
     kv_specs = {}
@@ -350,14 +358,13 @@ def _kverneland_parse_tables(tables) -> list:
         if not rows:
             continue
         header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
-        # Au moins 2 colonnes d'attribut non vides après "Model" : sinon ce
-        # n'est pas une comparaison multi-modèles mais une fiche à un seul
-        # modèle dont la table a juste une colonne vide en trop (ex.
-        # ['Model', 'Onyx 2030', ''] — une seule valeur réelle, pas une
-        # liste d'attributs). Sans ce filtre, chaque ligne d'attribut de ces
-        # fiches était prise pour un modèle distinct.
         non_empty_header = [h for h in header[1:] if h]
-        if header and header[0].lower() == "model" and len(non_empty_header) > 1:
+        distinct_header = set(non_empty_header)
+        is_model_col = bool(header) and header[0].lower() == "model"
+        num_data_rows = len(rows) - 1
+
+        if is_model_col and len(distinct_header) > 1 and num_data_rows <= len(non_empty_header):
+            # Une ligne par modèle : chaque ligne de données est un modèle distinct.
             for row in rows[1:]:
                 values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
                 if len(values) < 2 or not values[0]:
@@ -369,6 +376,22 @@ def _kverneland_parse_tables(tables) -> list:
                 }
                 if specs:
                     results.append((values[0], specs))
+        elif is_model_col and distinct_header:
+            # Table transposée : chaque colonne est un modèle/variante,
+            # chaque ligne un attribut commun aux colonnes.
+            model_specs = {}
+            for row in rows[1:]:
+                values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
+                if len(values) < 2 or not values[0]:
+                    continue
+                attr = values[0]
+                for j in range(1, min(len(header), len(values))):
+                    model, val = header[j], values[j]
+                    if model and val:
+                        model_specs.setdefault(model, {})[attr] = val
+            for model, specs in model_specs.items():
+                if specs:
+                    results.append((model, specs))
         else:
             for row in rows:
                 cells = row.query_selector_all("td, th")
