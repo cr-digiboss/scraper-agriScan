@@ -4383,6 +4383,113 @@ def scrape_niubo(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Agrisem — agrisem.com (travail du sol, semis direct)
+# Fiche produit = 1 table "transposée" : ligne 0 = largeurs de travail (une
+# colonne par variante), lignes suivantes = attributs communs (poids,
+# puissance requise, nombre de rangs...). Certaines fiches n'ont que des
+# specs en PDF (pas de table) : ignorées pour l'instant, comme pour les
+# autres marques où ce cas est rare.
+# ─────────────────────────────────────────────────────────────────────────────
+
+AGRISEM_HOME = "https://agrisem.com/"
+
+
+def _agrisem_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "agrisem.com" not in u.netloc:
+            continue
+        if "/product/" in u.path:
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _agrisem_parse_table(table) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir de la table
+    transposée d'une fiche produit (colonne 0 = libellé d'attribut, les
+    colonnes suivantes sont les largeurs/variantes de la gamme)."""
+    rows = table.query_selector_all("tr")
+    if not rows:
+        return {}
+    header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+    model_specs: dict = {}
+    for row in rows[1:]:
+        values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
+        if len(values) < 2 or not values[0]:
+            continue
+        attr = values[0]
+        for j in range(1, min(len(header), len(values))):
+            variant, val = header[j], values[j]
+            if variant and val:
+                model_specs.setdefault(variant, {})[attr] = val
+    return model_specs
+
+
+def scrape_agrisem(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Agrisem non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(AGRISEM_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"  Agrisem inaccessible : {e}")
+        return machines
+
+    product_links = _agrisem_product_links(page)
+    log.info(f"  Agrisem → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        if not tables:
+            continue
+
+        title_parts = clean(page.title()).split("—")
+        base_name = title_parts[0].strip()
+        category_hint = title_parts[1].strip() if len(title_parts) > 1 else ""
+        if not base_name or len(base_name) < 2:
+            continue
+
+        model_specs = _agrisem_parse_table(tables[0])
+        if not model_specs:
+            continue
+
+        category = normaliser_categorie(category_hint, url)
+
+        for variant, specs in model_specs.items():
+            if not specs:
+                continue
+            name = f"{base_name} {variant}"
+            key = f"Agrisem|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Agrisem"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Agrisem → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -4465,6 +4572,7 @@ def run() -> int:
             ("Samson (samson-agro.com)", scrape_samson),
             ("Bogballe (bogballe.com)", scrape_bogballe),
             ("Niubo (niubo.info)", scrape_niubo),
+            ("Agrisem (agrisem.com)", scrape_agrisem),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
