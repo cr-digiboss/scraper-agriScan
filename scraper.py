@@ -4260,14 +4260,16 @@ def scrape_bogballe(page: Page, existing_keys: set) -> list[Machine]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 NIUBO_HOME = "https://niubo.info/"
-NIUBO_CATEGORIES = [
-    "https://niubo.info/categoria_maquina/agricola/brazos-desbrozadores-2/",
-    "https://niubo.info/categoria_maquina/agricola/desbrozadoras-categoria/",
-    "https://niubo.info/categoria_maquina/agricola/elevadores/",
-    "https://niubo.info/categoria_maquina/agricola/equipos-ecosostenibles/",
-    "https://niubo.info/categoria_maquina/agricola/prepodadoras-barredoras/",
-    "https://niubo.info/categoria_maquina/agricola/trituradoras/",
-]
+# Les mots-clés de normaliser_categorie sont en anglais/français : les slugs
+# espagnols de Niubo n'y correspondent jamais, d'où ce mapping explicite.
+NIUBO_CATEGORIES = {
+    "https://niubo.info/categoria_maquina/agricola/brazos-desbrozadores-2/": "Broyeurs",
+    "https://niubo.info/categoria_maquina/agricola/desbrozadoras-categoria/": "Broyeurs",
+    "https://niubo.info/categoria_maquina/agricola/elevadores/": "Autre",
+    "https://niubo.info/categoria_maquina/agricola/equipos-ecosostenibles/": "Autre",
+    "https://niubo.info/categoria_maquina/agricola/prepodadoras-barredoras/": "Autre",
+    "https://niubo.info/categoria_maquina/agricola/trituradoras/": "Broyeurs",
+}
 
 NIUBO_ICON_LABELS = {
     "icon-ancho-trabajo": "Largeur de travail (mm)",
@@ -4331,7 +4333,7 @@ def scrape_niubo(page: Page, existing_keys: set) -> list[Machine]:
     """Scrape les fiches modèles Niubo non encore présentes dans Neon."""
     machines = []
 
-    for category_url in NIUBO_CATEGORIES:
+    for category_url, category in NIUBO_CATEGORIES.items():
         category_slug = category_url.rstrip("/").split("/")[-1]
         try:
             page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
@@ -4342,7 +4344,6 @@ def scrape_niubo(page: Page, existing_keys: set) -> list[Machine]:
 
         product_links = _niubo_product_links(page)
         log.info(f"  Niubo ({category_slug}) → {len(product_links)} fiches modèles trouvées")
-        category = normaliser_categorie(category_slug)
 
         for i, url in enumerate(sorted(product_links), 1):
             try:

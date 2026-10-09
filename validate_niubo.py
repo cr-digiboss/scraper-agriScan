@@ -2,7 +2,7 @@ from playwright.sync_api import sync_playwright
 import scraper
 
 TEST_CATEGORY_URL = "https://niubo.info/categoria_maquina/agricola/desbrozadoras-categoria/"
-scraper.NIUBO_CATEGORIES = [TEST_CATEGORY_URL]
+scraper.NIUBO_CATEGORIES = {TEST_CATEGORY_URL: "Broyeurs"}
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
