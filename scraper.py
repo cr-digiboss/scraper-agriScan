@@ -398,7 +398,13 @@ def _kverneland_parse_tables(tables) -> list:
                 if specs:
                     results.append((model, specs))
         else:
-            for row in rows:
+            # Clé/valeur classique. Si la ligne 0 est un véritable en-tête
+            # (cellules <th>), on l'ignore comme donnée : sinon son texte
+            # (ex. "Release Pressure kN") est injecté tel quel dans les
+            # specs, comme si c'était une ligne de données réelle.
+            first_row_is_header = bool(rows[0].query_selector_all("th")) and not rows[0].query_selector_all("td")
+            data_only_rows = rows[1:] if first_row_is_header else rows
+            for row in data_only_rows:
                 cells = row.query_selector_all("td, th")
                 if len(cells) >= 2:
                     k = clean(cells[0].inner_text())
