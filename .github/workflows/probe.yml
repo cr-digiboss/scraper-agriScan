@@ -12,6 +12,6 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r requirements.txt
-      - run: python recheck_bad_kv.py
+      - run: python inspect_bad_batch.py
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
