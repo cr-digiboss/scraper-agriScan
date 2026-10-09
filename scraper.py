@@ -4490,6 +4490,162 @@ def scrape_agrisem(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Einböck — einboeck.at (travail du sol mécanique, bio/désherbage)
+# Pas de table HTML sur les fiches produit. Chaque fiche a un PDF
+# "produktinfo-<modele>[-fr|-en].pdf" téléchargeable en plusieurs langues ;
+# on préfère la version FR si elle existe, sinon EN, sinon la version par
+# défaut (allemand, pas de suffixe). Ce PDF contient un vrai tableau
+# "une ligne par modèle" sur sa 2e page (ex. VIBROSTAR 4-390, 4-450...) avec
+# en-tête ['', 'Type', 'Working width...', 'No. of tines', ...] — colonne 0
+# est un code icône sans intérêt, colonne 1 le nom du modèle.
+# ─────────────────────────────────────────────────────────────────────────────
+
+EINBOECK_HOME = "https://www.einboeck.at/produkte/"
+# Les mots-clés de normaliser_categorie sont en anglais/français : les slugs
+# allemands d'Einböck n'y correspondent jamais, d'où ce mapping explicite.
+EINBOECK_CATEGORIES = {
+    "ackerkulturpflege": "Bineuses",
+    "aussaat-duengung": "Semoirs",
+    "bodenbearbeitung": "Travail du sol",
+    "gruenlandpflege": "Fenaison",
+}
+
+
+def _einboeck_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        u = urlparse(href)
+        if "einboeck.at" not in u.netloc:
+            continue
+        segs = [s for s in u.path.split("/") if s]
+        if len(segs) >= 3 and segs[0] == "produkte":
+            links.add(href.split("?")[0].split("#")[0])
+    return links
+
+
+def _einboeck_pdf_url(page: Page) -> str | None:
+    hrefs = page.eval_on_selector_all("a[href$='.pdf' i]", "els => els.map(e => e.href)")
+    candidates = [h for h in hrefs if "produktinfo" in h.lower()]
+    if not candidates:
+        return None
+    for suffix in ("-fr.pdf", "-en.pdf"):
+        for h in candidates:
+            if h.lower().endswith(suffix):
+                return h
+    # Repli : version par défaut du site (généralement allemand, sans suffixe).
+    other_langs = ("-fr.pdf", "-en.pdf", "-de.pdf", "-it.pdf", "-lt.pdf")
+    for h in candidates:
+        if not any(h.lower().endswith(s) for s in other_langs):
+            return h
+    return candidates[0]
+
+
+def _einboeck_parse_spec_table(pdf_bytes: bytes) -> list[tuple[str, dict]]:
+    """Cherche dans tout le PDF la table "une ligne par modèle" (en-tête
+    avec au moins 3 colonnes d'attribut non vides après le nom du modèle en
+    colonne 1 — colonne 0 est un code icône sans intérêt)."""
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for pg in pdf.pages:
+            for table in pg.extract_tables():
+                if not table or len(table) < 2:
+                    continue
+                header = [clean(c) for c in table[0]]
+                if len(header) < 3:
+                    continue
+                non_empty = [h for h in header[2:] if h]
+                if len(non_empty) < 3:
+                    continue
+                results = []
+                for row in table[1:]:
+                    if len(row) < 2 or not clean(row[1]):
+                        continue
+                    name = clean(row[1])
+                    specs = {
+                        header[j]: clean(row[j])
+                        for j in range(2, min(len(header), len(row)))
+                        if clean(row[j])
+                    }
+                    if specs:
+                        results.append((name, specs))
+                if results:
+                    return results
+    return []
+
+
+def scrape_einboeck(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Einböck non encore présentes dans Neon."""
+    machines = []
+    try:
+        page.goto(EINBOECK_HOME, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"  Einböck inaccessible : {e}")
+        return machines
+
+    product_links = _einboeck_product_links(page)
+    log.info(f"  Einböck → {len(product_links)} fiches modèles trouvées sur le site")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        pdf_url = _einboeck_pdf_url(page)
+        if not pdf_url:
+            continue
+
+        try:
+            resp = requests.get(pdf_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"    PDF inaccessible {pdf_url} → {e}")
+            continue
+
+        model_specs = _einboeck_parse_spec_table(resp.content)
+        if not model_specs:
+            continue
+
+        segs = [s for s in urlparse(url).path.split("/") if s]
+        category = EINBOECK_CATEGORIES.get(segs[1] if len(segs) > 1 else "", "Autre")
+
+        # Nom de base de la gamme (ex. "Chopstar hill"), tiré du slug d'URL
+        # plutôt que du <title> (accroche marketing allemande imbriquée,
+        # pas de séparateur fiable). Certaines tables PDF ne donnent qu'un
+        # code de taille en colonne "Type" (ex. "70"), pas le nom complet du
+        # modèle — on le préfixe dans ce cas.
+        base_name = _humanize_slug(segs[-1]) if segs else ""
+
+        for name, specs in model_specs:
+            if not name or len(name) < 2:
+                continue
+            if base_name and base_name.lower() not in name.lower():
+                name = f"{base_name} {name}"
+            key = f"Einböck|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Einböck"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Einböck → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -4573,6 +4729,7 @@ def run() -> int:
             ("Bogballe (bogballe.com)", scrape_bogballe),
             ("Niubo (niubo.info)", scrape_niubo),
             ("Agrisem (agrisem.com)", scrape_agrisem),
+            ("Einböck (einboeck.at)", scrape_einboeck),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
