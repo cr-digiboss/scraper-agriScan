@@ -13,4 +13,4 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: playwright install --with-deps chromium
-      - run: python validate_kverneland2.py
+      - run: python find_compact_url.py
