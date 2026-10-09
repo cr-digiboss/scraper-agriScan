@@ -4613,10 +4613,12 @@ def scrape_einboeck(page: Page, existing_keys: set) -> list[Machine]:
         segs = [s for s in urlparse(url).path.split("/") if s]
         category = EINBOECK_CATEGORIES.get(segs[1] if len(segs) > 1 else "", "Autre")
 
-        # Nom de base de la gamme (ex. "Chopstar Hill") : certaines tables
-        # PDF ne donnent qu'un code de taille en colonne "Type" (ex. "70"),
-        # pas le nom complet du modèle — on le préfixe dans ce cas.
-        base_name = clean(page.title()).split("-")[0].split("|")[0].strip()
+        # Nom de base de la gamme (ex. "Chopstar hill"), tiré du slug d'URL
+        # plutôt que du <title> (accroche marketing allemande imbriquée,
+        # pas de séparateur fiable). Certaines tables PDF ne donnent qu'un
+        # code de taille en colonne "Type" (ex. "70"), pas le nom complet du
+        # modèle — on le préfixe dans ce cas.
+        base_name = _humanize_slug(segs[-1]) if segs else ""
 
         for name, specs in model_specs:
             if not name or len(name) < 2:
