@@ -344,12 +344,16 @@ def _kverneland_parse_tables(tables) -> list:
       des lignes ['Working width (m)', '9.50', '6.30'], ou un seul modèle
       répété sur plusieurs colonnes de variantes comme
       ['Model', 'Optima R', 'Optima R', ...]).
-    On distingue "une ligne par modèle" de "transposée" par la forme de la
-    table : une vraie gamme de modèles tient dans peu de lignes (une par
-    taille/variante), alors qu'une table transposée a plus de lignes
-    (une par attribut) que de colonnes de modèles. Sans cette distinction,
-    une table transposée est lue à l'envers et chaque ligne d'attribut est
-    prise pour un modèle distinct.
+    On distingue "une ligne par modèle" de "transposée" en regardant si les
+    valeurs en colonne 0 des lignes de données ressemblent à de vraies
+    désignations de modèle Kverneland (quasi toujours un code avec un
+    chiffre, ex. "Compact 1612-12", "DTX 300 SB**", "Onyx 2048 F") plutôt
+    qu'à des libellés d'attribut (ex. "Tine spacing Min - Max", "Headstock",
+    sans aucun chiffre). Un simple comptage lignes/colonnes ne suffit pas :
+    une table transposée avec peu de lignes d'attributs mais plusieurs
+    colonnes de vrais modèles (ex. 4 charrues comparées sur seulement 3-4
+    lignes d'attributs) passerait à tort pour "une ligne par modèle" et
+    prendrait chaque libellé d'attribut pour un modèle distinct.
     """
     results = []
     kv_specs = {}
@@ -361,14 +365,18 @@ def _kverneland_parse_tables(tables) -> list:
         non_empty_header = [h for h in header[1:] if h]
         distinct_header = set(non_empty_header)
         is_model_col = bool(header) and header[0].lower() == "model"
-        num_data_rows = len(rows) - 1
 
-        if is_model_col and len(distinct_header) > 1 and num_data_rows <= len(non_empty_header):
+        data_rows = []
+        for row in rows[1:]:
+            values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
+            if len(values) >= 2 and values[0]:
+                data_rows.append(values)
+        looks_like_models = [v[0] for v in data_rows if any(ch.isdigit() for ch in v[0])]
+        row_per_model = bool(data_rows) and len(looks_like_models) >= len(data_rows) / 2
+
+        if is_model_col and len(distinct_header) > 1 and row_per_model:
             # Une ligne par modèle : chaque ligne de données est un modèle distinct.
-            for row in rows[1:]:
-                values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
-                if len(values) < 2 or not values[0]:
-                    continue
+            for values in data_rows:
                 specs = {
                     header[j]: values[j]
                     for j in range(1, min(len(header), len(values)))
@@ -380,10 +388,7 @@ def _kverneland_parse_tables(tables) -> list:
             # Table transposée : chaque colonne est un modèle/variante,
             # chaque ligne un attribut commun aux colonnes.
             model_specs = {}
-            for row in rows[1:]:
-                values = [clean(c.inner_text()) for c in row.query_selector_all("td, th")]
-                if len(values) < 2 or not values[0]:
-                    continue
+            for values in data_rows:
                 attr = values[0]
                 for j in range(1, min(len(header), len(values))):
                     model, val = header[j], values[j]
