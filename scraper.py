@@ -2249,7 +2249,17 @@ def _parse_kuhn_spec_tables(tables) -> dict:
                 val = clean(value_cells[col_idx].inner_text())
                 if val:
                     result[name][label] = val
-    return result
+    # Filet de sécurité : si une fiche modèle n'a que des specs dont la
+    # valeur est identique à son libellé (ex. {"Moteur": "Moteur", ...}),
+    # c'est que l'alignement labels/valeurs a échoué pour cette table (vu
+    # en pratique sur une page catégorie mal appariée, probablement après
+    # un blocage anti-bot partiel) et que le "nom de modèle" récupéré est en
+    # réalité un libellé ou une valeur de spec, pas un vrai modèle.
+    return {
+        name: specs
+        for name, specs in result.items()
+        if specs and not all(k == v for k, v in specs.items())
+    }
 
 
 def scrape_kuhn(page: Page, existing_keys: set) -> list[Machine]:
