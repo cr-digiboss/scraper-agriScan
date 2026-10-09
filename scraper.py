@@ -4648,14 +4648,17 @@ def scrape_einboeck(page: Page, existing_keys: set) -> list[Machine]:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Rauch — rauch.de (épandeurs d'engrais)
-# Fiche produit = 3 tables HTML :
-#   table 0 : nom de variante + description marketing (inutile)
-#   table 1 : ligne 0 = en-tête avec un nom de variante par colonne,
-#             lignes suivantes = valeurs (même index de ligne que table 2)
-#   table 2 : une colonne, une ligne par libellé d'attribut (même ordre
-#             que les lignes de valeurs de la table 1)
-# Les deux tables de specs sont donc à combiner par index de ligne plutôt
-# que par une table unique classique.
+# Nombre et ordre des tables HTML d'une fiche produit varient selon le
+# modèle (3 à 5+ tables : options de disques d'éjection, extensions de
+# trémie, etc. en plus du tableau de specs principal) — impossible de se
+# fier à un index fixe. On repère plutôt le vrai tableau de specs comme
+# celui avec l'en-tête le plus long (≥ 3 colonnes : 1 pour le libellé +
+# au moins 2 variantes de modèle) et le plus de lignes (les tableaux
+# "décoratifs" d'options, ex. en-tête ['', 'Ejection discs', 'Working
+# width', 'Beschreibung'], ont la même forme mais beaucoup moins de
+# lignes). Selon le modèle, les libellés d'attributs sont soit déjà dans
+# la colonne 0 de ce tableau, soit dans un tableau à part (une colonne,
+# même nombre de lignes) à combiner par index de ligne.
 # ─────────────────────────────────────────────────────────────────────────────
 
 RAUCH_CATEGORIES = {
@@ -4678,35 +4681,91 @@ def _rauch_product_links(page: Page) -> set:
     return links
 
 
-def _rauch_parse_spec_tables(tables) -> dict:
-    """Retourne {variante: {attribut: valeur}} à partir des tables 1 et 2
-    de la fiche produit (cf. commentaire ci-dessus)."""
-    if len(tables) < 3:
-        return {}
-
-    value_rows = tables[1].query_selector_all("tr")
-    label_rows = tables[2].query_selector_all("tr")
-    if len(value_rows) < 2 or len(label_rows) < 2:
-        return {}
-
-    header = [clean(c.inner_text()) for c in value_rows[0].query_selector_all("td, th")]
-    variants = header[1:]
-    if not variants:
-        return {}
-
-    model_specs: dict = {v: {} for v in variants if v}
-    n = min(len(value_rows), len(label_rows))
-    for i in range(1, n):
-        label_cells = label_rows[i].query_selector_all("td, th")
-        attr = clean(label_cells[0].inner_text()) if label_cells else ""
-        if not attr:
+def _rauch_find_value_table(tables):
+    """Repère le tableau de specs principal : en-tête d'au moins 3
+    colonnes (libellé + ≥ 2 variantes) et, parmi ces candidats, celui
+    avec le plus de lignes (élimine les tableaux d'options décoratifs de
+    même forme mais beaucoup plus courts)."""
+    best = None
+    best_rows = -1
+    for idx, t in enumerate(tables):
+        rows = t.query_selector_all("tr")
+        if len(rows) < 2:
             continue
-        values = [clean(c.inner_text()) for c in value_rows[i].query_selector_all("td, th")]
-        for j, variant in enumerate(variants, start=1):
-            if variant not in model_specs:
+        header = [clean(c.inner_text()) for c in rows[0].query_selector_all("td, th")]
+        if len(header) < 3 or sum(1 for h in header[1:] if h) < 1:
+            continue
+        if len(rows) > best_rows:
+            best_rows = len(rows)
+            best = (idx, rows, header)
+    return best
+
+
+def _rauch_find_label_table(tables, exclude_idx: int, n_rows: int):
+    """Repère le tableau de libellés d'attributs séparé (une colonne,
+    même nombre de lignes que le tableau de valeurs), quand les
+    libellés ne sont pas déjà dans la colonne 0 du tableau de valeurs."""
+    for idx, t in enumerate(tables):
+        if idx == exclude_idx:
+            continue
+        rows = t.query_selector_all("tr")
+        if len(rows) != n_rows:
+            continue
+        if all(len(r.query_selector_all("td, th")) == 1 for r in rows):
+            return rows
+    return None
+
+
+def _rauch_parse_spec_tables(tables) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir du tableau de
+    specs principal de la fiche produit (cf. commentaire ci-dessus)."""
+    found = _rauch_find_value_table(tables)
+    if not found:
+        return {}
+    value_idx, value_rows, header = found
+
+    variants = header[1:]
+    model_specs: dict = {v: {} for v in variants if v}
+    data_rows = value_rows[1:]
+
+    # Les libellés sont-ils déjà dans la colonne 0 des lignes de données ?
+    checked = inline = 0
+    for r in data_rows:
+        cells = r.query_selector_all("td, th")
+        if not cells:
+            continue
+        checked += 1
+        if clean(cells[0].inner_text()):
+            inline += 1
+    use_inline = checked > 0 and inline >= checked * 0.3
+
+    if use_inline:
+        for r in data_rows:
+            cells = [clean(c.inner_text()) for c in r.query_selector_all("td, th")]
+            if not cells or not cells[0]:
                 continue
-            if j < len(values) and values[j]:
-                model_specs[variant][attr] = values[j]
+            attr = cells[0]
+            for j, variant in enumerate(variants, start=1):
+                if variant not in model_specs:
+                    continue
+                if j < len(cells) and cells[j]:
+                    model_specs[variant][attr] = cells[j]
+    else:
+        label_rows = _rauch_find_label_table(tables, value_idx, len(value_rows))
+        if not label_rows:
+            return {}
+        n = min(len(value_rows), len(label_rows))
+        for i in range(1, n):
+            label_cells = label_rows[i].query_selector_all("td, th")
+            attr = clean(label_cells[0].inner_text()) if label_cells else ""
+            if not attr or i - 1 >= len(data_rows):
+                continue
+            values = [clean(c.inner_text()) for c in data_rows[i - 1].query_selector_all("td, th")]
+            for j, variant in enumerate(variants, start=1):
+                if variant not in model_specs:
+                    continue
+                if j < len(values) and values[j]:
+                    model_specs[variant][attr] = values[j]
 
     return {v: specs for v, specs in model_specs.items() if specs}
 
