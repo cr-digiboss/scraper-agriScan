@@ -4894,60 +4894,67 @@ def _amazone_find_leaflet_params(page: Page):
     return None
 
 
-def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> tuple[str, dict]:
-    """Retourne (nom_de_base, {variante: {attribut: valeur}}) à partir du
-    PDF d'une page (cf. commentaire ci-dessus)."""
+def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir du PDF d'une page.
+
+    Les variantes viennent du tableau d'en-tête (une seule ligne, une
+    colonne par variante) — le tableau de valeurs qui suit peut avoir des
+    cellules vides pour une valeur commune à toutes les variantes, voire
+    perdre une colonne entière selon la mise en page (observé sur ZA-TS :
+    une 9e variante présente dans le texte mais absente du tableau), donc
+    on ne lui fait pas confiance pour les libellés.
+
+    Les libellés sont retrouvés en cherchant, pour chaque ligne du
+    tableau de valeurs, la ligne de texte brut se terminant exactement
+    par les mêmes valeurs (dans le même ordre) : ça évite de supposer un
+    alignement ligne-à-ligne entre texte et tableau, qui casse dès qu'une
+    ligne de texte est un simple titre de section sans valeurs (ex.
+    "Payload (kg)" seul, sur sa propre ligne)."""
     with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         if not pdf.pages:
-            return "", {}
+            return {}
         page0 = pdf.pages[0]
         tables = page0.extract_tables()
         if not tables:
-            return "", {}
-        table = max(tables, key=len)
-        if len(table) < 2:
-            return "", {}
-        variants = [clean(c) for c in table[0] if clean(c)]
-        if not variants:
-            return "", {}
+            return {}
+
+        header_tables = [t for t in tables if len(t) == 1 and len(t[0]) >= 2]
+        if len(header_tables) != 1:
+            return {}
+        variants = [clean(c) for c in header_tables[0][0]]
+        if not all(variants):
+            return {}
+
+        remaining = [t for t in tables if t is not header_tables[0]]
+        if not remaining:
+            return {}
+        data_table = max(remaining, key=len)
 
         text = page0.extract_text() or ""
         lines = [l for l in text.split("\n") if l.strip()]
-        header_idx = None
-        for i, line in enumerate(lines):
-            if all(v in line for v in variants):
-                header_idx = i
-                break
-        if header_idx is None:
-            return "", {}
 
-        base_name = lines[header_idx]
-        for v in variants:
-            base_name = base_name.replace(v, "")
-        base_name = clean(base_name)
-
-        attr_lines = lines[header_idx + 1:]
         model_specs: dict = {v: {} for v in variants}
-        trailing_numbers = re.compile(r"(?:[\d][\d,.]*(?:\s*[–-]\s*[\d][\d,.]*)?\s*)+$")
+        for row in data_table:
+            row_vals = [clean(c) if c else "–" for c in row]
+            if not any(v != "–" for v in row_vals):
+                continue
 
-        for row_idx, row in enumerate(table[1:]):
-            if row_idx >= len(attr_lines):
-                break
-            label = clean(trailing_numbers.sub("", attr_lines[row_idx]))
+            label = None
+            for line in lines:
+                tokens = line.split()
+                if len(tokens) < len(row_vals):
+                    continue
+                if tokens[-len(row_vals):] == row_vals:
+                    label = clean(" ".join(tokens[: len(tokens) - len(row_vals)]))
+                    break
             if not label:
                 continue
-            last = None
-            filled = []
-            for cell in row:
-                v = clean(cell) if cell else ""
-                if v:
-                    last = v
-                filled.append(last)
-            for variant, val in zip(variants, filled):
-                if val:
+
+            for variant, val in zip(variants, row_vals):
+                if val and val != "–":
                     model_specs[variant][label] = val
 
-        return base_name, model_specs
+        return model_specs
 
 
 def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
@@ -4994,9 +5001,15 @@ def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
             log.warning(f"    Leaflet inaccessible {url} → {e}")
             continue
 
-        base_name, model_specs = _amazone_parse_spec_pdf(resp.content)
+        model_specs = _amazone_parse_spec_pdf(resp.content)
         if not model_specs:
             continue
+
+        # Le code modèle (ex. "ZA-M") est toujours le premier mot du
+        # <title> de la fiche produit (ex. "ZA-M centrifugal fertiliser
+        # spreader", "ZA-TS mounted spreader") — plus fiable que le PDF,
+        # dont la mise en page de l'en-tête varie selon le produit.
+        base_name = clean(page.title()).split(" ")[0] if page.title() else ""
 
         for variant, specs in model_specs.items():
             if not specs:

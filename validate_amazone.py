@@ -29,8 +29,9 @@ with sync_playwright() as p:
             timeout=30,
         )
         print("status:", resp.status_code, "bytes:", len(resp.content))
-        base_name, specs = scraper._amazone_parse_spec_pdf(resp.content)
+        base_name = scraper.clean(page.title()).split(" ")[0] if page.title() else ""
         print("base_name:", repr(base_name))
+        specs = scraper._amazone_parse_spec_pdf(resp.content)
         for variant, s in specs.items():
             print(f"  variant={variant!r} -> {len(s)} attrs, ex: {list(s.items())[:4]}")
 
