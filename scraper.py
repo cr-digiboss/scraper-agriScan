@@ -4942,6 +4942,22 @@ def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> dict:
         text = page0.extract_text() or ""
         lines = [l for l in text.split("\n") if l.strip()]
 
+        # Garde-fou : pdfplumber perd parfois une colonne entière de la
+        # grille (observé sur des PDF à beaucoup de variantes, ex.
+        # ZA-TS/ZA-V) — toutes les tables de la page sous-comptent alors
+        # les variantes de façon cohérente, donc comparer les tables
+        # entre elles ne détecte rien. On compare plutôt au nombre de
+        # valeurs d'une ligne de texte purement numérique (ex. une ligne
+        # de poids sans libellé) : si elle a plus de valeurs que de
+        # variantes détectées, la page a une colonne manquante → on
+        # n'extrait rien plutôt que produire des données décalées.
+        pure_number = re.compile(r"^[\d][\d,.]*$")
+        for line in lines:
+            tokens = line.split()
+            if len(tokens) > 1 and all(pure_number.match(t) for t in tokens):
+                if len(tokens) > len(variants):
+                    return {}
+
         model_specs: dict = {v: {} for v in variants}
         for row in data_table:
             # La mise en page de certains PDF (ex. ZA-TS, ZA-V) fait
