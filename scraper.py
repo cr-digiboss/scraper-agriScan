@@ -5045,7 +5045,13 @@ def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
         for variant, specs in model_specs.items():
             if not specs:
                 continue
-            name = clean(f"{base_name} {variant}")
+            # La variante répète parfois déjà le code modèle (ex.
+            # "UX 3200 Special" pour la page "UX") — éviter la
+            # duplication "UX UX 3200 Special".
+            if base_name and variant.lower().startswith(base_name.lower()):
+                name = clean(variant)
+            else:
+                name = clean(f"{base_name} {variant}")
             if not name or len(name) < 2:
                 continue
             key = f"Amazone|{name}|"
