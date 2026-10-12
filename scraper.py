@@ -4833,6 +4833,248 @@ def scrape_rauch(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Amazone — amazone.net (épandeurs, semoirs, pulvérisateurs, travail du sol)
+# Pas de table HTML sur les fiches produit : le lien "Technical data" pointe
+# vers un visualiseur de catalogue (displayprospekt.aspx?drucknummer=...&
+# page=N) qui déclenche en réalité le téléchargement direct d'un PDF d'une
+# seule page via downloadcenter.amazone.de/file/view/printnumber/<ref>/
+# language/en-gb/doctype/leaflet?page=N. Cette page contient un vrai tableau
+# PDF (une colonne par variante), mais les libellés d'attributs ne sont pas
+# capturés comme colonne par pdfplumber (ils sont hors de la zone de
+# tableau détectée) : on les récupère depuis le texte brut de la page, en
+# retirant la suite de nombres finale de chaque ligne, puis on les combine
+# par index de ligne avec les valeurs du tableau (les cellules fusionnées,
+# ex. une largeur de travail commune à toutes les variantes, sont propagées
+# depuis la dernière valeur non vide).
+# ─────────────────────────────────────────────────────────────────────────────
+
+AMAZONE_CATEGORIES = {
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/cultivation/cultivators": "Travail du sol",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/cultivation/ploughs": "Charrues",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/cultivation/compact-disc-harrows": "Déchaumeurs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/cultivation/rotary-harrows-rotary-cultivators": "Herses rotatives",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/fertilising-technology/mounted-spreader": "Épandeurs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/fertilising-technology/trailed-spreader": "Épandeurs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/seeding/conventional-seed-drills": "Semoirs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/seeding/pneumatic-seed-drills": "Semoirs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/seeding/precision-sowing-technology": "Semoirs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/crop-protection/mounted-sprayer": "Pulvérisateurs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/crop-protection/trailed-sprayer": "Pulvérisateurs",
+    "https://amazone.net/en/products-digital-solutions/agricultural-technology/crop-protection/self-propelled-sprayer": "Pulvérisateurs",
+}
+
+
+def _amazone_product_links(page: Page, category_url: str) -> set:
+    """Fiches produit = pages sous le chemin de la catégorie se terminant
+    par un ID numérique (≥ 5 chiffres) — filtre nécessaire car la nav du
+    site expose aussi d'autres liens à ID numérique (actualités, pages
+    promo...) hors des catégories produits."""
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    prefix = category_url.rstrip("/") + "/"
+    links = set()
+    for href in hrefs:
+        h = href.split("?")[0].split("#")[0]
+        if h.startswith(prefix) and re.search(r"-\d{5,}$", h):
+            links.add(h)
+    return links
+
+
+def _amazone_find_leaflet_params(page: Page):
+    """Repère le lien "Technical data" (displayprospekt.aspx) et en
+    extrait la référence catalogue et le numéro de page, utilisés pour
+    construire l'URL de téléchargement direct du PDF."""
+    hrefs = page.eval_on_selector_all(
+        "a[href*='displayprospekt']", "els => els.map(e => e.href)"
+    )
+    for href in hrefs:
+        m = re.search(r"drucknummer=([^&]+).*?page=(\d+)", href)
+        if m:
+            return m.group(1), m.group(2)
+    return None
+
+
+def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir du PDF d'une page.
+
+    Les variantes viennent du tableau d'en-tête (une seule ligne, une
+    colonne par variante) — le tableau de valeurs qui suit peut avoir des
+    cellules vides pour une valeur commune à toutes les variantes, voire
+    perdre une colonne entière selon la mise en page (observé sur ZA-TS :
+    une 9e variante présente dans le texte mais absente du tableau), donc
+    on ne lui fait pas confiance pour les libellés.
+
+    Les libellés sont retrouvés en cherchant, pour chaque ligne du
+    tableau de valeurs, la ligne de texte brut se terminant exactement
+    par les mêmes valeurs (dans le même ordre) : ça évite de supposer un
+    alignement ligne-à-ligne entre texte et tableau, qui casse dès qu'une
+    ligne de texte est un simple titre de section sans valeurs (ex.
+    "Payload (kg)" seul, sur sa propre ligne)."""
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        if not pdf.pages:
+            return {}
+        page0 = pdf.pages[0]
+        tables = page0.extract_tables()
+        if not tables:
+            return {}
+
+        # Deux mises en page observées : soit l'en-tête est une table à
+        # part (une ligne, une colonne par variante — ex. ZA-TS/ZA-V),
+        # soit l'en-tête est simplement la ligne 0 de l'unique table de
+        # specs (ex. ZA-M).
+        header_tables = [t for t in tables if len(t) == 1 and len(t[0]) >= 2]
+        if len(header_tables) == 1:
+            variants = [clean(c) for c in header_tables[0][0]]
+            remaining = [t for t in tables if t is not header_tables[0]]
+            if not remaining:
+                return {}
+            data_table = max(remaining, key=len)
+        else:
+            table = max(tables, key=len)
+            if len(table) < 2:
+                return {}
+            variants = [clean(c) for c in table[0]]
+            data_table = table[1:]
+
+        if not all(variants):
+            return {}
+
+        text = page0.extract_text() or ""
+        lines = [l for l in text.split("\n") if l.strip()]
+
+        # Garde-fou : pdfplumber perd parfois une colonne entière de la
+        # grille (observé sur des PDF à beaucoup de variantes, ex.
+        # ZA-TS/ZA-V) — toutes les tables de la page sous-comptent alors
+        # les variantes de façon cohérente, donc comparer les tables
+        # entre elles ne détecte rien. On compare plutôt au nombre de
+        # valeurs d'une ligne de texte purement numérique (ex. une ligne
+        # de poids sans libellé) : si elle a plus de valeurs que de
+        # variantes détectées, la page a une colonne manquante → on
+        # n'extrait rien plutôt que produire des données décalées.
+        pure_number = re.compile(r"^[\d][\d,.]*$")
+        for line in lines:
+            tokens = line.split()
+            if len(tokens) > 1 and all(pure_number.match(t) for t in tokens):
+                if len(tokens) > len(variants):
+                    return {}
+
+        model_specs: dict = {v: {} for v in variants}
+        for row in data_table:
+            # La mise en page de certains PDF (ex. ZA-TS, ZA-V) fait
+            # parfois perdre une colonne entière à pdfplumber sur une
+            # ligne donnée — on l'ignore plutôt que de décaler
+            # l'association variante/valeur en silence.
+            if len(row) != len(variants):
+                continue
+            row_vals = [clean(c) if c else "–" for c in row]
+            if not any(v != "–" for v in row_vals):
+                continue
+
+            label = None
+            for line in lines:
+                tokens = line.split()
+                if len(tokens) < len(row_vals):
+                    continue
+                if tokens[-len(row_vals):] == row_vals:
+                    label = clean(" ".join(tokens[: len(tokens) - len(row_vals)]))
+                    break
+            if not label:
+                continue
+
+            for variant, val in zip(variants, row_vals):
+                if val and val != "–":
+                    model_specs[variant][label] = val
+
+        return model_specs
+
+
+def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Amazone non encore présentes dans Neon."""
+    machines = []
+    product_links: set = set()
+
+    for category_url, category in AMAZONE_CATEGORIES.items():
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Amazone ({category_url}) inaccessible : {e}")
+            continue
+        found = _amazone_product_links(page, category_url)
+        log.info(f"  Amazone ({category_url.rstrip('/').split('/')[-1]}) → {len(found)} liens trouvés")
+        for url in found:
+            product_links.add((url, category))
+
+    log.info(f"  Amazone → {len(product_links)} fiches modèles au total")
+
+    for i, (url, category) in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        params = _amazone_find_leaflet_params(page)
+        if not params:
+            continue
+        drucknummer, page_num = params
+
+        try:
+            resp = requests.get(
+                f"https://downloadcenter.amazone.de/file/view/printnumber/{drucknummer}/language/en-gb/doctype/leaflet",
+                params={"page": page_num},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": url},
+                timeout=30,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"    Leaflet inaccessible {url} → {e}")
+            continue
+
+        model_specs = _amazone_parse_spec_pdf(resp.content)
+        if not model_specs:
+            continue
+
+        # Le code modèle (ex. "ZA-M") est toujours le premier mot du
+        # <title> de la fiche produit (ex. "ZA-M centrifugal fertiliser
+        # spreader", "ZA-TS mounted spreader") — plus fiable que le PDF,
+        # dont la mise en page de l'en-tête varie selon le produit.
+        base_name = clean(page.title()).split(" ")[0] if page.title() else ""
+
+        for variant, specs in model_specs.items():
+            if not specs:
+                continue
+            # La variante répète parfois déjà le code modèle (ex.
+            # "UX 3200 Special" pour la page "UX") — éviter la
+            # duplication "UX UX 3200 Special".
+            if base_name and variant.lower().startswith(base_name.lower()):
+                name = clean(variant)
+            else:
+                name = clean(f"{base_name} {variant}")
+            if not name or len(name) < 2:
+                continue
+            key = f"Amazone|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Amazone"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Amazone → {len(machines)} machines trouvées")
+    return machines
+
+
 def _upsert(machines: list[Machine]) -> tuple[int, int]:
     """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
 
@@ -4918,6 +5160,7 @@ def run() -> int:
             ("Agrisem (agrisem.com)", scrape_agrisem),
             ("Einböck (einboeck.at)", scrape_einboeck),
             ("Rauch (rauch.de)", scrape_rauch),
+            ("Amazone (amazone.net)", scrape_amazone),
         ]:
             log.info(f"Source : {nom_source}")
             # Une page dédiée par source : une redirection asynchrone tardive
