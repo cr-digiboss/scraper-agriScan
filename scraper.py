@@ -4944,6 +4944,12 @@ def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> dict:
 
         model_specs: dict = {v: {} for v in variants}
         for row in data_table:
+            # La mise en page de certains PDF (ex. ZA-TS, ZA-V) fait
+            # parfois perdre une colonne entière à pdfplumber sur une
+            # ligne donnée — on l'ignore plutôt que de décaler
+            # l'association variante/valeur en silence.
+            if len(row) != len(variants):
+                continue
             row_vals = [clean(c) if c else "–" for c in row]
             if not any(v != "–" for v in row_vals):
                 continue
