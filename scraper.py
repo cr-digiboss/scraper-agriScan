@@ -4918,17 +4918,26 @@ def _amazone_parse_spec_pdf(pdf_bytes: bytes) -> dict:
         if not tables:
             return {}
 
+        # Deux mises en page observées : soit l'en-tête est une table à
+        # part (une ligne, une colonne par variante — ex. ZA-TS/ZA-V),
+        # soit l'en-tête est simplement la ligne 0 de l'unique table de
+        # specs (ex. ZA-M).
         header_tables = [t for t in tables if len(t) == 1 and len(t[0]) >= 2]
-        if len(header_tables) != 1:
-            return {}
-        variants = [clean(c) for c in header_tables[0][0]]
+        if len(header_tables) == 1:
+            variants = [clean(c) for c in header_tables[0][0]]
+            remaining = [t for t in tables if t is not header_tables[0]]
+            if not remaining:
+                return {}
+            data_table = max(remaining, key=len)
+        else:
+            table = max(tables, key=len)
+            if len(table) < 2:
+                return {}
+            variants = [clean(c) for c in table[0]]
+            data_table = table[1:]
+
         if not all(variants):
             return {}
-
-        remaining = [t for t in tables if t is not header_tables[0]]
-        if not remaining:
-            return {}
-        data_table = max(remaining, key=len)
 
         text = page0.extract_text() or ""
         lines = [l for l in text.split("\n") if l.strip()]
