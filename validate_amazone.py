@@ -30,7 +30,7 @@ with sync_playwright() as p:
         )
         print("status:", resp.status_code, "bytes:", len(resp.content))
         base_name, specs = scraper._amazone_parse_spec_pdf(resp.content)
-        print("base_name:", base_name!r)
+        print("base_name:", repr(base_name))
         for variant, s in specs.items():
             print(f"  variant={variant!r} -> {len(s)} attrs, ex: {list(s.items())[:4]}")
 
