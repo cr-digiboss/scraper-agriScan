@@ -142,7 +142,17 @@ def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBr
                 machines = []
             finally:
                 page.close()
+            # normaliser_categorie() de scraper.py range certaines catégories explicites en
+            # « Autre » (« Travail du sol », « Semis »…) : on reprend alors le nom de la
+            # catégorie du site dont l'URL contient la fiche.
+            pages_categories = categories.items() if isinstance(categories, dict) else []
             for m in machines:
+                if (m.category or "Autre") == "Autre" and m.sourceUrl:
+                    chemin = urlparse(m.sourceUrl).path
+                    for nom_cat, url_cat in pages_categories:
+                        if chemin.startswith(urlparse(url_cat).path.rstrip("/") + "/"):
+                            m.category = nom_cat
+                            break
                 try:
                     specs = json.loads(m.specs) if m.specs else {}
                 except json.JSONDecodeError:

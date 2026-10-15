@@ -29,6 +29,8 @@ UNITES: dict[str, tuple[str, float]] = {
     "tr/min": ("regime", 1.0),
     "rpm": ("regime", 1.0),
     "l": ("volume", 1.0),
+    "pouces": ("longueur", 0.0254),
+    "in": ("longueur", 0.0254),
 }
 
 # Quand plusieurs unités d'une même dimension coexistent (« 107 kW / 150 ch »),
@@ -94,6 +96,20 @@ def valeurs(texte: str, dimension: str, unite_par_defaut: str | None = None) -> 
     unite = next((u for u in ordre if u in candidats), next(iter(candidats)))
     facteur = UNITES[unite][1]
     return [round(v * facteur, 4) for v in candidats[unite]]
+
+
+def paire_kw_ch(libelle: str, valeur: str) -> str:
+    """Libellé « (kW/ch) » et valeur « 44/60 » → « 60 ch » (« (ch/kW) » → 1re valeur)."""
+    lib = (libelle or "").lower().replace(" ", "")
+    ordre = "kw/ch" if "kw/ch" in lib else "ch/kw" if "ch/kw" in lib else None
+    if not ordre:
+        return valeur
+    garder = 2 if ordre == "kw/ch" else 1
+    return re.sub(
+        r"(\d+(?:[.,]\d+)?)\s*/\s*(\d+(?:[.,]\d+)?)",
+        lambda m: f"{m.group(garder)} ch",
+        valeur,
+    )
 
 
 def unite_du_libelle(libelle: str) -> str | None:

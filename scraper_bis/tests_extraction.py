@@ -79,6 +79,23 @@ def verifier_extraction():
     assert sorted(e.brute.nom for e in res) == ["Herse", "Série 12 Rouleau", "Série 5 Rouleau"], [e.brute.nom for e in res]
     assert len(signales) == 1 and next(e for e in res if e.brute.nom == "Herse").champs, signales
 
+    # Formats vus sur kuhn.fr (collecte du 15/10)
+    kuhn = extraire(FicheBrute(
+        marque="Kuhn", nom="Venta 3030", categorie="Semis",
+        specs={"Puissance maxi tracteur (kW/ch)": "44/60", "Puissance mini nécessaire (kW/ch)": "37/50",
+               "Poids (kg) env (NSH)": "675", "Poids (kg) env (T)": "550", "Attelage": "Std 2",
+               "Equipement hydraulique requis": "1 DE pour le troisième point hydraulique",
+               "Poids total autorisé (kg)": "3500", "Largeur de coupe (pouces)": "120"},
+    )).champs
+    assert kuhn["puissanceRequiseMaxCh"] == 60 and kuhn["puissanceRequiseMinCh"] == 50, kuhn
+    assert kuhn["poidsVideKg"] == 675 and kuhn["ptacKg"] == 3500, kuhn
+    assert kuhn["categorieAttelage"] == "2" and kuhn["distributeursDERequis"] == 1, kuhn
+    assert kuhn["largeurTravailMinM"] == 3.05, kuhn
+
+    from .normalisation import famille
+    assert famille("Travail du sol") == "TRAVAIL_DU_SOL" and famille("Paillage") == "ELEVAGE"
+    assert famille("Protection des cultures") == "PROTECTION_CULTURES" and famille("Semis") == "SEMIS_PLANTATION"
+
 
 if __name__ == "__main__":
     verifier_unites()

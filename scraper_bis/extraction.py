@@ -20,7 +20,7 @@ from .normalisation import (
     nom_categorie,
     sans_accents,
 )
-from .unites import unite_du_libelle, valeurs
+from .unites import paire_kw_ch, unite_du_libelle, valeurs
 
 # Colonnes entières (les autres sont des décimaux)
 ENTIERS = {
@@ -64,7 +64,7 @@ class Contexte:
 @dataclass
 class Regle:
     motif: str  # expression régulière sur le libellé normalisé
-    sorte: str  # plage | max | unique | attelage | norme | pdf | cat_attelage | distributeurs
+    sorte: str  # plage | max | min | unique | attelage | norme | pdf | cat_attelage | distributeurs
     champs: tuple[str, ...]
     dimension: str | None = None
     unite: str | None = None  # unité par défaut si la valeur n'en a pas
@@ -89,10 +89,18 @@ REGLES: list[Regle] = [
           "max", ("longueurTransportM",), "longueur", "m", 0.8),
     Regle(r"^(poids a vide|poids|poids total a vide|masse|poids de base|poids mini|poids a vide env|weight|masse en ordre de marche|poids en ordre de marche|poids de la machine)$",
           "unique", ("poidsVideKg",), "masse", "kg", 0.85),
+    # « Poids (kg) env (NSH) », « Poids env. (kg) », « Poids (kg) env - avec rouleau… » : variante d'équipement
+    Regle(r"^(poids|poids a vide|masse)(?! total| maxi| max| admissible| autorise| par | sur | utile| en charge)( env| environ| approx)?( .*)?$",
+          "unique", ("poidsVideKg",), "masse", "kg", 0.7),
     Regle(r"^(ptac|poids total autorise|poids total en charge|poids total admissible)\b",
           "unique", ("ptacKg",), "masse", "kg"),
     Regle(r"^(puissance requise|puissance necessaire|puissance tracteur|puissance tracteur requise|puissance mini maxi|puissance mini|besoin en puissance|besoin tracteur|tracteur requis|puissance tracteur mini|required power|puissance de traction|puissance du tracteur)\b",
           "plage", ("puissanceRequiseMinCh", "puissanceRequiseMaxCh"), "puissance", "ch"),
+    # Kuhn : « Puissance maxi tracteur (kW/ch) : 44/60 », « Puissance mini nécessaire (kW/ch) »
+    Regle(r"^(puissance maxi tracteur|puissance max tracteur|puissance maximale du tracteur|puissance maxi admissible|puissance tracteur maxi)\b",
+          "max", ("puissanceRequiseMaxCh",), "puissance", "ch"),
+    Regle(r"^(puissance mini necessaire|puissance minimale necessaire|puissance mini tracteur|puissance tracteur mini|puissance minimale du tracteur)\b",
+          "min", ("puissanceRequiseMinCh",), "puissance", "ch"),
     Regle(r"^(puissance|puissance max|puissance maximale|puissance nominale|puissance moteur|puissance maxi|rated power|engine power|puissance brute|puissance nette|puissance nominale moteur)$",
           "unique", ("puissanceMoteurCh",), "puissance", "ch", 0.8, MOTEUR),
     Regle(r"^(puissance|puissance max|puissance maximale)$",
@@ -110,7 +118,7 @@ REGLES: list[Regle] = [
     Regle(r"^(prise de force|pdf|regime pdf|regime de prise de force|pto|entrainement|regime d entrainement|vitesse pdf)\b",
           "pdf", ("regimePdf",), confiance=0.8, si=OUTIL),
     Regle(r"(attelage|categorie|cat )", "cat_attelage", ("categorieAttelage",), confiance=0.8, si=OUTIL),
-    Regle(r"^(distributeurs?|distributeurs? requis|distributeurs? hydrauliques?|prises hydrauliques)\b",
+    Regle(r"^(distributeurs?|distributeurs? requis|distributeurs? hydrauliques?|prises hydrauliques|equipement hydraulique requis|equipement hydraulique|prises hydrauliques requises)\b",
           "distributeurs", ("distributeursDERequis", "distributeursSERequis"), confiance=0.7, si=OUTIL),
 ]
 
@@ -123,7 +131,7 @@ ATTELAGE_MOTS = [
 ]
 
 NORME = re.compile(r"(stage\s*(?:v|iv|iiib|iiia|3b|3a|5|4)\b|tier\s*(?:4\s*final|4f|4i|4|3|2)\b)", re.IGNORECASE)
-CAT_ATTELAGE = re.compile(r"cat(?:egorie|\.)?\s*(iv|iii|ii|i|[1-4])\s*(n)?\b", re.IGNORECASE)
+CAT_ATTELAGE = re.compile(r"(?:cat(?:egorie|\.)?|std)\s*(iv|iii|ii|i|[1-4])\s*(n)?\b", re.IGNORECASE)
 ROMAIN = {"i": "1", "ii": "2", "iii": "3", "iv": "4"}
 
 
@@ -136,8 +144,9 @@ def _borner(champ: str, v: float) -> float | None:
 
 def _appliquer(regle: Regle, libelle: str, valeur: str) -> tuple[dict[str, object], str | None]:
     """Valeurs proposées par une règle, ou une raison d'écart."""
+    valeur = paire_kw_ch(libelle, valeur)
     brut = sans_accents(valeur).lower()
-    if regle.sorte in ("plage", "max", "unique"):
+    if regle.sorte in ("plage", "max", "min", "unique"):
         nombres = valeurs(valeur, regle.dimension, unite_du_libelle(libelle) or regle.unite)
         if not nombres:
             return {}, None
@@ -151,6 +160,8 @@ def _appliquer(regle: Regle, libelle: str, valeur: str) -> tuple[dict[str, objec
                 res[regle.champs[1]] = max(nombres)
         elif regle.sorte == "max":
             res = {regle.champs[0]: max(nombres)}
+        elif regle.sorte == "min":
+            res = {regle.champs[0]: min(nombres)}
         else:
             distincts = sorted(set(nombres))
             if len(distincts) > 1 and distincts[-1] > distincts[0] * 1.05:
