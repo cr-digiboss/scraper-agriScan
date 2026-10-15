@@ -257,6 +257,30 @@ CATEGORIE_MOTS_CLES = [
     ("irrigation", "Matériel d'irrigation"),
     ("snow", "Déneigement"),
     ("neige", "Déneigement"),
+    # Ajoutés en fin de liste (15/10/2026) : ils ne servent que si aucun mot-clé
+    # ci-dessus ne correspond, donc aucune catégorie déjà classée ne change. Avant,
+    # ces noms de catégories des sites tombaient en « Autre ».
+    ("travail du sol", "Travail du sol"),
+    ("bodenbearbeitung", "Travail du sol"),
+    ("semis", "Semoirs"),
+    ("fertilisation", "Épandeurs"),
+    ("engrais", "Épandeurs"),
+    ("lisier", "Épandeurs"),
+    ("desherbage", "Bineuses"),
+    ("désherbage", "Bineuses"),
+    ("entretien des cultures", "Bineuses"),
+    ("fenaison", "Fenaison"),
+    ("andainage", "Fenaison"),
+    ("fourrage", "Fenaison"),
+    ("paillage", "Élevage & stabulation"),
+    ("pailleuse", "Élevage & stabulation"),
+    ("paysage", "Broyeurs"),
+    ("chargeur", "Chargeurs"),
+    ("betteravier", "Cultures spécialisées"),
+    ("haulm", "Cultures spécialisées"),
+    ("crop handling", "Cultures spécialisées"),
+    ("maraichage", "Cultures spécialisées"),
+    ("maraîchage", "Cultures spécialisées"),
 ]
 
 
