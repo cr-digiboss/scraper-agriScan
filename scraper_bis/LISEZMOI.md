@@ -1,13 +1,21 @@
-# Scraper bis — test en dev
+# Scraper AgriScan (scraper bis)
 
-Pipeline de test, à côté du scraper de production (`scraper.py` n'est pas modifié) :
+Pipeline unique de collecte du catalogue, pour les 37 marques. Il réutilise les fonctions de
+collecte de `scraper.py` et remplace son ancien enregistrement (`db.py`, `qdrant_sync.py`).
 
-1. **Collecter** : réutilise les fonctions de `scraper.py` (Kuhn, Lemken, Monosem), sans
-   sauter les machines déjà en base, après vérification du `robots.txt`.
-2. **Extraire** : transforme les specs brutes en colonnes techniques (largeur, puissance
-   requise, poids, attelage, norme…), avec pour chaque valeur l'extrait source et une confiance.
-3. **Rapport** : couverture des champs clés par marque, libellés non reconnus, valeurs écartées.
-4. **Base de dev** (facultatif, `--ecrire`) : écrit dans `DATABASE_URL_DEV`, jamais dans `DATABASE_URL`.
+1. **Collecter** : vérifie le `robots.txt`, puis lance la fonction de la marque dans `scraper.py`.
+   Avec `--ecrire`, seules les machines absentes de la base sont lues, comme l'ancien scraper de
+   nuit. `--complet` relit tout le catalogue (specs modifiées, machines arrêtées).
+2. **Extraire** : transforme les specs brutes en colonnes techniques (largeur, puissance requise,
+   poids, attelage, norme…), avec pour chaque valeur l'extrait source et une confiance.
+3. **Écrire** (`--ecrire`) : base de dev (`DATABASE_URL_DEV`) par défaut, production
+   (`DATABASE_URL`) seulement avec `--prod`. Chaque marque est écrite dès qu'elle est collectée.
+4. **Indexer** (`--qdrant`) : les machines créées ou modifiées sont indexées dans Qdrant pour
+   l'assistant, au même format que l'ancien `qdrant_sync.py` (+ `machineId`).
+5. **Rapport** : couverture des champs clés par marque, libellés non reconnus, valeurs écartées,
+   bilan d'écriture.
+
+Marques : `python -c "from scraper_bis.sources import MARQUES; print(*MARQUES)"`, ou `toutes`.
 
 ## Installation
 
@@ -19,11 +27,13 @@ pip install openpyxl          # seulement pour --depuis-xlsx
 playwright install chromium   # seulement pour la collecte en direct
 ```
 
-Ajouter dans `.env` (jamais l'URL de production) :
+Ajouter dans `.env` :
 
 ```
 DATABASE_URL_DEV=postgresql://…@…neon.tech/…   # branche Neon de dev
-MISTRAL_API_KEY=…                              # seulement pour --llm
+MISTRAL_API_KEY=…                              # --llm et --qdrant
+# Production et Qdrant : seulement sur la machine qui fait tourner le scraper de nuit
+# DATABASE_URL=…  QDRANT_URL=…  QDRANT_API_KEY=…  QDRANT_COLLECTION=…
 ```
 
 ## Utilisation
@@ -35,8 +45,17 @@ python -m scraper_bis.tests_extraction
 # Test rapide : 2 catégories par marque, rapport seulement
 python -m scraper_bis --max-categories 2
 
-# Collecte complète Kuhn + Lemken + Monosem, puis écriture en base de dev
+# Nouveautés de Kuhn + Lemken + Monosem → base de dev
 python -m scraper_bis --ecrire
+
+# Tout le catalogue, toutes les marques → base de dev
+python -m scraper_bis --marques toutes --ecrire --complet
+
+# Scraper de nuit (GitHub Actions) : nouveautés → production + Qdrant ; le dimanche avec --complet
+python -m scraper_bis --marques toutes --ecrire --prod --qdrant
+
+# Réindexer tout le catalogue dans Qdrant (ancien backfill_qdrant.py)
+python -m scraper_bis.indexation
 
 # Rejouer l'extraction sans refaire la collecte (après avoir enrichi les règles)
 python -m scraper_bis --depuis-json sortie/2026-10-15_113000/brut.json --ecrire
@@ -57,7 +76,7 @@ Chaque exécution crée `sortie/AAAA-MM-JJ_HHMMSS/` :
 | `extrait.json` | Valeurs extraites, avec extrait source et confiance |
 | `libelles_non_reconnus.csv` | Libellés à ajouter aux règles de `extraction.py`, triés par fréquence |
 
-## Règles d'écriture en base de dev
+## Règles d'écriture
 
 - **Nouvelle machine** : créée « à vérifier », avec sa source (`MachineSource`) et la provenance de
   chaque valeur (`AttributProvenance`). Elle apparaît dans `/admin/fiches`.
@@ -65,16 +84,21 @@ Chaque exécution crée `sortie/AAAA-MM-JJ_HHMMSS/` :
 - **Contenu modifié** : nouvelle source. Une colonne est remplie seulement si la fiche n'est pas
   validée et que ce champ n'a pas été corrigé à la main. Sinon la valeur est seulement proposée
   (« Source : X — Utiliser » dans la relecture) et une fiche validée repasse « à vérifier ».
-- **Enums** : les valeurs sont lues dans la base (majuscules ou minuscules, `AUTRE` présent ou non).
-  Une catégorie sans famille reconnue est ignorée et signalée si `Famille.AUTRE` n'existe pas.
+- **Statut, années, vidéo** suivent le site (une machine retirée passe « discontinued »). L'image
+  n'est remplie que si la fiche n'en a pas : une image choisie dans l'admin n'est pas remplacée.
+- **Catégorie** : sous-catégorie `parent__enfant` quand le site en donne une (comme le site et la
+  migration v2) ; famille déduite des mots-clés, `AUTRE` sinon.
+- **Enums** : les valeurs sont lues dans la base (majuscules ou minuscules).
 - **Même marque + nom + variante** dans une collecte : la gamme est ajoutée au nom quand elle
   diffère ; sinon la fiche la plus complète est gardée et le doublon signalé.
-- Pas d'indexation Qdrant en dev.
+- **Qdrant** : seulement avec `--qdrant` (la collection est celle de la production : ne pas
+  l'utiliser avec la base de dev).
 
 ## Ajouter une marque
 
-Ajouter une entrée dans `MARQUES` (`sources.py`) : nom affiché, fonction de `scraper.py`,
-constante des pages de catégories, méthode (`CRAWL_HTML` ou `EXTRACTION_PDF`).
+Écrire sa fonction `scrape_xxx(page, existing_keys)` dans `scraper.py`, puis ajouter une entrée
+dans `MARQUES` (`sources.py`) : nom affiché, fonction, constante des pages d'entrée, et
+`"methode": "EXTRACTION_PDF"` si les specs viennent de brochures PDF.
 
 ## Enrichir l'extraction
 

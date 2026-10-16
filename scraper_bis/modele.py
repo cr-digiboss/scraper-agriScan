@@ -20,7 +20,10 @@ class FicheBrute:
     source_url: str = ""
     methode: str = "CRAWL_HTML"  # ou EXTRACTION_PDF
     image_url: str = ""
+    video_url: str = ""
     statut: str = "active"
+    annee_debut: str = ""
+    annee_fin: str = ""
 
     def cle(self) -> str:
         return f"{self.marque}|{self.nom}|{self.variante}"

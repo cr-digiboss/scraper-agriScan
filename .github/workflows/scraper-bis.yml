@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       marques:
-        description: "Marques (séparées par des virgules)"
+        description: "Marques (séparées par des virgules, ou « toutes »)"
         default: "kuhn,lemken,monosem"
         required: true
       max_categories:
@@ -15,6 +15,10 @@ on:
         required: false
       ecrire:
         description: "Écrire dans la base de DEV (secret DATABASE_URL_DEV)"
+        type: boolean
+        default: false
+      complet:
+        description: "Avec écriture : relire aussi les machines déjà en base (sinon nouveautés seulement)"
         type: boolean
         default: false
       llm:
@@ -30,7 +34,7 @@ concurrency:
 jobs:
   scraper-bis:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
@@ -52,11 +56,13 @@ jobs:
           MARQUES: ${{ inputs.marques }}
           MAX_CATEGORIES: ${{ inputs.max_categories }}
           ECRIRE: ${{ inputs.ecrire }}
+          COMPLET: ${{ inputs.complet }}
           LLM: ${{ inputs.llm }}
         run: |
           args=(--marques "$MARQUES")
           if [ -n "$MAX_CATEGORIES" ]; then args+=(--max-categories "$MAX_CATEGORIES"); fi
           if [ "$ECRIRE" = "true" ]; then args+=(--ecrire); fi
+          if [ "$COMPLET" = "true" ]; then args+=(--complet); fi
           if [ "$LLM" = "true" ]; then args+=(--llm); fi
           python -m scraper_bis "${args[@]}"
 

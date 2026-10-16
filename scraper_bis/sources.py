@@ -19,13 +19,76 @@ UA = (
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-# Marques branchées sur le scraper bis : fonction de scraper.py, constante des
-# pages de catégories (pour limiter le test et vérifier robots.txt), méthode.
+# Les 37 marques collectées : fonction de scraper.py, constante de ses pages
+# d'entrée (catégories ou accueil : sert à vérifier robots.txt et à limiter un
+# test avec --max-categories), méthode de collecte. Même ordre que l'ancien
+# scraper de nuit.
 MARQUES = {
-    "kuhn": {"nom": "Kuhn", "fonction": "scrape_kuhn", "categories": "KUHN_CATEGORIES", "methode": "CRAWL_HTML"},
-    "lemken": {"nom": "Lemken", "fonction": "scrape_lemken", "categories": "LEMKEN_CATEGORIES", "methode": "CRAWL_HTML"},
+    "kverneland": {"nom": "Kverneland", "fonction": "scrape_kverneland", "categories": "KVERNELAND_HOME"},
+    "claas": {"nom": "Claas", "fonction": "scrape_claas", "categories": "CLAAS_TRACTEURS_URL"},
+    "fendt": {"nom": "Fendt", "fonction": "scrape_fendt", "categories": "FENDT_HOME"},
+    "massey-ferguson": {"nom": "Massey Ferguson", "fonction": "scrape_massey_ferguson", "categories": "MF_HOME"},
+    "new-holland": {"nom": "New Holland", "fonction": "scrape_new_holland", "categories": "NEW_HOLLAND_CATEGORIES"},
+    "case-ih": {"nom": "Case IH", "fonction": "scrape_case_ih", "categories": "CASEIH_CATEGORIES"},
     "monosem": {"nom": "Monosem", "fonction": "scrape_monosem", "categories": "MONOSEM_CATEGORIES", "methode": "EXTRACTION_PDF"},
+    "same": {"nom": "Same", "fonction": "scrape_same", "categories": "SDF_SITES", "methode": "EXTRACTION_PDF"},
+    "avr": {"nom": "AVR", "fonction": "scrape_avr", "categories": "AVR_CATEGORIES"},
+    "mchale": {"nom": "McHale", "fonction": "scrape_mchale", "categories": "MCHALE_HOME"},
+    "kemper": {"nom": "Kemper", "fonction": "scrape_kemper", "categories": "KEMPER_HOME"},
+    "pottinger": {"nom": "Pöttinger", "fonction": "scrape_pottinger", "categories": "POTTINGER_CATEGORIES"},
+    "grimme": {"nom": "Grimme", "fonction": "scrape_grimme", "categories": "GRIMME_HOME"},
+    "vaderstad": {"nom": "Väderstad", "fonction": "scrape_vaderstad", "categories": "VADERSTAD_HOME"},
+    "lemken": {"nom": "Lemken", "fonction": "scrape_lemken", "categories": "LEMKEN_CATEGORIES"},
+    "kuhn": {"nom": "Kuhn", "fonction": "scrape_kuhn", "categories": "KUHN_CATEGORIES"},
+    "jcb": {"nom": "JCB", "fonction": "scrape_jcb", "categories": "JCB_CATEGORIES"},
+    "valtra": {"nom": "Valtra", "fonction": "scrape_valtra", "categories": "VALTRA_SERIES"},
+    "john-deere": {"nom": "John Deere", "fonction": "scrape_johndeere", "categories": "JOHNDEERE_CATEGORIES"},
+    "kubota": {"nom": "Kubota", "fonction": "scrape_kubota", "categories": "KUBOTA_CATEGORIES"},
+    "krone": {"nom": "Krone", "fonction": "scrape_krone", "categories": "KRONE_CATALOGUE_URL"},
+    "guttler": {"nom": "Güttler", "fonction": "scrape_guttler", "categories": "GUTTLER_SITEMAP_URL"},
+    "actisol": {"nom": "Actisol", "fonction": "scrape_actisol", "categories": "ACTISOL_CATEGORIES"},
+    "mccormick": {"nom": "McCormick", "fonction": "scrape_mccormick", "categories": "MCCORMICK_CATALOGUE_URL"},
+    "franquet": {"nom": "Franquet", "fonction": "scrape_franquet", "categories": "FRANQUET_CATEGORIES"},
+    "vicon": {"nom": "Vicon", "fonction": "scrape_vicon", "categories": "VICON_HOME"},
+    "horsch": {"nom": "Horsch", "fonction": "scrape_horsch", "categories": "HORSCH_HOME"},
+    "sulky": {"nom": "Sulky", "fonction": "scrape_sulky", "categories": "SULKY_HOME"},
+    "hardi": {"nom": "Hardi", "fonction": "scrape_hardi", "categories": "HARDI_HOME"},
+    "berthoud": {"nom": "Berthoud", "fonction": "scrape_berthoud", "categories": "BERTHOUD_GAMME_URL"},
+    "ropa": {"nom": "Ropa", "fonction": "scrape_ropa", "categories": "ROPA_HOME"},
+    "samson": {"nom": "Samson", "fonction": "scrape_samson", "categories": "SAMSON_HOME"},
+    "bogballe": {"nom": "Bogballe", "fonction": "scrape_bogballe", "categories": "BOGBALLE_MODELES_URL"},
+    "niubo": {"nom": "Niubo", "fonction": "scrape_niubo", "categories": "NIUBO_CATEGORIES"},
+    "agrisem": {"nom": "Agrisem", "fonction": "scrape_agrisem", "categories": "AGRISEM_HOME"},
+    "einboeck": {"nom": "Einböck", "fonction": "scrape_einboeck", "categories": "EINBOECK_HOME", "methode": "EXTRACTION_PDF"},
+    "rauch": {"nom": "Rauch", "fonction": "scrape_rauch", "categories": "RAUCH_CATEGORIES"},
 }
+
+
+def resoudre_marques(texte: str) -> tuple[list[str], list[str]]:
+    """« toutes » ou « Kuhn, Massey Ferguson, pöttinger » → (clés connues, inconnues)."""
+    import unicodedata
+
+    def cle(x: str) -> str:
+        x = "".join(c for c in unicodedata.normalize("NFD", x) if unicodedata.category(c) != "Mn")
+        return "-".join(x.lower().replace("_", " ").split())
+
+    demandees = [cle(m) for m in (texte or "").split(",") if m.strip()]
+    if demandees in ([], ["toutes"], ["tout"], ["all"]):
+        return list(MARQUES), []
+    alias = {cle(c["nom"]): k for k, c in MARQUES.items()} | {k: k for k in MARQUES} | {k.replace("-", ""): k for k in MARQUES}
+    connues = [alias[m] for m in demandees if m in alias]
+    return list(dict.fromkeys(connues)), [m for m in demandees if m not in alias]
+
+
+def _pages_categories(categories) -> list[tuple[str, str]]:
+    """(nom de catégorie, URL) quelle que soit la forme de la constante de scraper.py :
+    {nom: url}, {url: nom}, [url…] ou une seule URL d'accueil."""
+    if isinstance(categories, str):
+        return [("", categories)]
+    if isinstance(categories, dict):
+        return [(v, k) if str(k).startswith("http") else (k, v) for k, v in categories.items()]
+    return [("", u) for u in categories]
+
 
 NOMS_MARQUES = {
     "kuhn": "Kuhn", "lemken": "Lemken", "monosem": "Monosem", "new holland": "New Holland", "case ih": "Case IH",
@@ -106,8 +169,17 @@ def robots_autorise(urls: list[str]) -> tuple[bool, str]:
     return True, "robots.txt : autorisé"
 
 
-def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBrute], dict[str, dict]]:
-    """Lance les scrapers existants (scraper.py) sans filtrer les machines déjà en base."""
+def collecter(
+    cles: list[str], max_categories: int | None, existantes: set[str] | None = None, apres_marque=None
+) -> tuple[list[FicheBrute], dict[str, dict]]:
+    """Lance les fonctions de collecte de scraper.py.
+
+    existantes : clés « marque|nom|variante » déjà en base. Comme l'ancien scraper de
+    nuit, les fonctions sautent alors ces machines (collecte rapide des nouveautés).
+    Vide → toutes les fiches sont relues (collecte complète).
+    apres_marque(nom, fiches) : appelé après chaque marque (écriture au fil de l'eau,
+    pour ne rien perdre si l'exécution est interrompue).
+    """
     import scraper  # import tardif : playwright, pdfplumber… ne sont utiles qu'ici
     from playwright.sync_api import sync_playwright
 
@@ -119,12 +191,14 @@ def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBr
         for cle in cles:
             conf = MARQUES[cle]
             nom = conf["nom"]
+            methode = conf.get("methode", "CRAWL_HTML")
             categories = getattr(scraper, conf["categories"])
-            if max_categories:
+            if max_categories and not isinstance(categories, str):
                 limitees = dict(list(categories.items())[:max_categories]) if isinstance(categories, dict) else categories[:max_categories]
                 setattr(scraper, conf["categories"], limitees)
                 categories = limitees
-            urls = list(categories.values()) if isinstance(categories, dict) else list(categories)
+            pages = _pages_categories(categories)
+            urls = [u for _, u in pages if str(u).startswith("http")]
 
             ok, motif = robots_autorise(urls)
             log.info(f"{nom} : {motif}")
@@ -133,9 +207,11 @@ def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBr
                 continue
 
             debut = time.time()
+            # Une page par marque : une redirection tardive d'un site ne doit pas
+            # interrompre la marque suivante (cf. ancien scraper de nuit).
             page = contexte.new_page()
             try:
-                machines = getattr(scraper, conf["fonction"])(page, set())
+                machines = getattr(scraper, conf["fonction"])(page, set(existantes or ()))
             except Exception as e:
                 log.error(f"{nom} : échec de la collecte ({e})")
                 journal[nom]["erreur"] = str(e)
@@ -145,11 +221,11 @@ def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBr
             # normaliser_categorie() de scraper.py range certaines catégories explicites en
             # « Autre » (« Travail du sol », « Semis »…) : on reprend alors le nom de la
             # catégorie du site dont l'URL contient la fiche.
-            pages_categories = categories.items() if isinstance(categories, dict) else []
+            pages_nommees = [(n, u) for n, u in pages if n and str(u).startswith("http")]
             for m in machines:
                 if (m.category or "Autre") == "Autre" and m.sourceUrl:
                     chemin = urlparse(m.sourceUrl).path
-                    for nom_cat, url_cat in pages_categories:
+                    for nom_cat, url_cat in pages_nommees:
                         if chemin.startswith(urlparse(url_cat).path.rstrip("/") + "/"):
                             m.category = nom_cat
                             break
@@ -161,11 +237,19 @@ def collecter(cles: list[str], max_categories: int | None) -> tuple[list[FicheBr
                     marque=m.brand, nom=m.name, variante=m.variant or "", gamme=m.range or "",
                     categorie=m.category or "Autre", sous_categorie=m.subcategory or "",
                     description=m.description or "", specs={str(k): str(v) for k, v in specs.items()},
-                    source_url=m.sourceUrl or "", methode=conf["methode"], image_url=m.imageUrl or "",
-                    statut=m.statut or "active",
+                    source_url=m.sourceUrl or "", methode=methode, image_url=m.imageUrl or "",
+                    video_url=m.videoUrl or "", statut=m.statut or "active",
+                    annee_debut=str(m.anneeDebut or ""), annee_fin=str(m.anneeFin or ""),
                 ))
+            if apres_marque and machines:
+                try:
+                    apres_marque(nom, fiches[len(fiches) - len(machines):])
+                except Exception as e:
+                    log.error(f"{nom} : échec de l'écriture ({e})")
+                    journal[nom]["erreur"] = f"écriture : {e}"
             journal[nom]["fiches"] = len(machines)
             journal[nom]["duree_s"] = round(time.time() - debut)
+            log.info(f"{nom} : {len(machines)} fiches en {journal[nom]['duree_s']} s")
             time.sleep(random.uniform(1.0, 2.0))
         navigateur.close()
     return fiches, journal
