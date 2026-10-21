@@ -5,53 +5,34 @@ UA = (
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
-
-def inspect(page, url, label):
-    print("\n" + "=" * 70)
-    print(label, url)
-    try:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        print("titre:", page.title())
-        print("url finale:", page.url)
-        tables = page.query_selector_all("table")
-        print(f"{len(tables)} tables HTML")
-        for t in tables[:3]:
-            txt = t.inner_text().strip().replace("\n", " | ")
-            print("  echantillon:", txt[:400])
-        spec_divs = page.query_selector_all(
-            "[class*='spec' i], [class*='technical' i], [class*='data-table' i]"
-        )
-        print(f"{len(spec_divs)} divs spec-like")
-        for d in spec_divs[:3]:
-            try:
-                txt = d.inner_text().strip().replace("\n", " | ")
-                if txt:
-                    print("  echantillon div:", txt[:400])
-            except Exception:
-                pass
-        pdfs = page.eval_on_selector_all(
-            "a[href$='.pdf' i], a[href*='.pdf?' i]", "els => els.map(e => e.href)"
-        )
-        print(f"{len(set(pdfs))} PDF uniques:", sorted(set(pdfs))[:5])
-        if url.rstrip("/").endswith("tractors"):
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "mahindratractor.com/tractor/" in h})
-            print(f"{len(links)} liens produits /tractor/:")
-            for l in links[:30]:
-                print(" ", l)
-    except Exception as e:
-        print("ERREUR:", e)
-
+URLS = [
+    "https://www.mahindratractor.com/tractor/arjun-555-di",
+    "https://www.mahindratractor.com/tractor/arjun-605-di-pp",
+]
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(user_agent=UA)
+    for url in URLS:
+        print("\n" + "=" * 70)
+        print(url)
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+        print("titre:", page.title())
+        tables = page.query_selector_all("table")
+        print(f"{len(tables)} tables")
+        for ti, t in enumerate(tables):
+            rows = t.query_selector_all("tr")
+            print(f"\n--- TABLE {ti} ({len(rows)} rows) ---")
+            for ri, r in enumerate(rows[:35]):
+                cells = r.query_selector_all("th, td")
+                vals = [c.inner_text().strip().replace("\n", " ")[:50] for c in cells]
+                print(f"  row {ri}: {vals}")
 
-    inspect(page, "https://www.mahindratractor.com/tractors", "MAHINDRA categorie")
-    inspect(page, "https://www.mahindratractor.com/tractor/arjun-555-di", "MAHINDRA produit")
-
-    page2 = browser.new_page(user_agent=UA)
-    inspect(page2, "https://www.rabe.de/en", "RABE")
-
+        # Cherche aussi tous les liens produits sur une page listant TOUS les tracteurs
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "mahindratractor.com/tractor/" in h})
+        print(f"\n{len(links)} liens /tractor/ sur cette page:")
+        for l in links[:40]:
+            print(" ", l)
     browser.close()
