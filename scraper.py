@@ -5456,6 +5456,120 @@ def scrape_pellenc(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Mahindra — mahindratractor.com (tracteurs, Inde)
+# Pas de liste de produits centralisée fiable (les pages catégorie ne
+# listent que quelques modèles en JS) : on découvre les fiches modèles via
+# le sitemap XML, en filtrant les URLs /tractors/<slug> qui ne sont pas des
+# pages catégorie/filtre (navigation globale, filtres HP, etc.).
+# Fiche produit = une seule table HTML : ligne d'en-tête (cellule 0 =
+# texte UI "Select up to 2 models...", cellule 1 = nom complet du modèle),
+# puis des lignes [attribut, valeur, '', ''].
+# ─────────────────────────────────────────────────────────────────────────────
+
+MAHINDRA_SITEMAP_URL = "https://www.mahindratractor.com/english-sitemap.xml"
+
+_MAHINDRA_NAV_SLUGS = {
+    "2wd-tractors", "4wd-tractors", "latest-tractors", "accessories",
+    "tractor-pricelist", "digisense", "compact-tractors", "oja-tractors",
+    "novo-tractors", "jivo-tractors", "yuvraj-tractors", "xp-tractors",
+    "sp-tractors", "arjun-tractors",
+}
+
+
+def _mahindra_product_urls() -> list:
+    try:
+        r = requests.get(MAHINDRA_SITEMAP_URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+    except Exception as e:
+        log.warning(f"  Mahindra (sitemap) inaccessible : {e}")
+        return []
+
+    urls = re.findall(r"<loc>(.*?)</loc>", r.text)
+    candidates = []
+    for u in sorted({u for u in urls if "/tractors/" in u}):
+        slug = u.rstrip("/").split("/")[-1]
+        if slug in _MAHINDRA_NAV_SLUGS:
+            continue
+        if re.search(r"-hp-tractors$|-kw-\d+-hp-to-\d+-hp-tractors$|^\d+-to-\d+", slug):
+            continue
+        if slug.endswith("-tractors") or slug.endswith("-tractor-list"):
+            continue
+        candidates.append(u)
+    return candidates
+
+
+def _mahindra_parse_spec_table(table) -> tuple:
+    """Retourne (nom_complet_modele, {attribut: valeur}) à partir de la table
+    de specs d'une fiche produit Mahindra."""
+    if len(table) < 2:
+        return "", {}
+    header = table[1] if len(table) > 1 else table[0]
+    if len(header) < 2:
+        return "", {}
+    name = clean(header[1])
+    if not name:
+        return "", {}
+
+    specs = {}
+    for row in table[2:]:
+        if len(row) < 2:
+            continue
+        label = clean(row[0])
+        value = clean(row[1])
+        if label and value:
+            specs[label] = value
+
+    return name, specs
+
+
+def scrape_mahindra(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Mahindra non encore présentes dans Neon."""
+    machines = []
+    product_urls = _mahindra_product_urls()
+    log.info(f"  Mahindra → {len(product_urls)} fiches modèles candidates (sitemap)")
+
+    for i, url in enumerate(product_urls, 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        parsed_tables = [
+            [[clean(c.inner_text()) for c in r.query_selector_all("td, th")] for r in t.query_selector_all("tr")]
+            for t in tables
+        ]
+        if not parsed_tables:
+            continue
+
+        name, specs = _mahindra_parse_spec_table(max(parsed_tables, key=len))
+        if not name or not specs:
+            continue
+
+        key = f"Mahindra|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Mahindra"
+        m.name = name
+        m.category = "Tracteurs"
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_urls)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Mahindra → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
