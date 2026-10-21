@@ -1,5 +1,6 @@
 import requests
-import re
+from io import BytesIO
+import pdfplumber
 from playwright.sync_api import sync_playwright
 
 UA = (
@@ -7,54 +8,42 @@ UA = (
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
-BLOCKLIST_EXACT = {
-    "2wd-tractors", "4wd-tractors", "latest-tractors", "accessories",
-    "tractor-pricelist", "digisense", "compact-tractors", "oja-tractors",
-    "novo-tractors", "jivo-tractors", "yuvraj-tractors", "xp-tractors",
-    "sp-tractors", "arjun-tractors",
-}
 
-r = requests.get("https://www.mahindratractor.com/english-sitemap.xml", timeout=20, headers={"User-Agent": UA})
-urls = re.findall(r"<loc>(.*?)</loc>", r.text)
-tractors_urls = sorted({u for u in urls if "/tractors/" in u})
-print(f"{len(tractors_urls)} URLs /tractors/ au total")
+def inspect_pdf(url, label):
+    print("\n" + "=" * 70)
+    print(label, url)
+    try:
+        r = requests.get(url, timeout=30, headers={"User-Agent": UA})
+        print("status:", r.status_code, "bytes:", len(r.content))
+        with pdfplumber.open(BytesIO(r.content)) as pdf:
+            print(f"{len(pdf.pages)} pages")
+            for pi, page in enumerate(pdf.pages):
+                tables = page.extract_tables()
+                if tables:
+                    for ti, t in enumerate(tables):
+                        print(f"  page {pi} table {ti}: {len(t)} rows x {len(t[0]) if t else 0} cols")
+                        for row in t[:5]:
+                            print("    ", row)
+    except Exception as e:
+        print("ERREUR:", e)
 
-candidates = []
-for u in tractors_urls:
-    slug = u.rstrip("/").split("/")[-1]
-    if slug in BLOCKLIST_EXACT:
-        continue
-    if re.search(r"-hp-tractors$|-kw-\d+-hp-to-\d+-hp-tractors$|^\d+-to-\d+", slug):
-        continue
-    if slug.endswith("-tractors") or slug.endswith("-tractor-list"):
-        continue
-    candidates.append(u)
 
-print(f"\n{len(candidates)} candidats produits apres filtre:")
-for c in candidates:
-    print(" ", c)
+inspect_pdf("https://www.tecnoma.fr/wp-content/uploads/2023/TECNOMA_Brochure-LASER-2.pdf", "TECNOMA brochure")
 
-# Valide la structure de table sur un echantillon
-sample = candidates[:4]
+# Gregoire Besson : chercher des specs sous forme JS/accordion
 with sync_playwright() as p:
     browser = p.chromium.launch()
     page = browser.new_page(user_agent=UA)
-    for url in sample:
-        print("\n" + "=" * 70)
-        print(url)
-        try:
-            page.goto(url, timeout=25000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3500)
-            print("titre:", page.title())
-            tables = page.query_selector_all("table")
-            print(f"{len(tables)} tables")
-            for ti, t in enumerate(tables[:2]):
-                rows = t.query_selector_all("tr")
-                print(f"--- table {ti} ({len(rows)} rows) ---")
-                for ri, row in enumerate(rows[:10]):
-                    cells = row.query_selector_all("th, td")
-                    vals = [c.inner_text().strip().replace("\n", " ")[:40] for c in cells]
-                    print(f"  row {ri}: {vals}")
-        except Exception as e:
-            print("ERREUR:", e)
+    print("\n" + "=" * 70)
+    print("GREGOIRE BESSON - recherche produit")
+    try:
+        page.goto("https://www.gregoire-besson.com/en/", timeout=25000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "gregoire-besson.com" in h})
+        print(f"{len(links)} liens trouves (echantillon):")
+        for l in links[:30]:
+            print(" ", l)
+    except Exception as e:
+        print("ERREUR:", e)
     browser.close()
