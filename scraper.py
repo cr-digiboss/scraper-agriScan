@@ -5274,6 +5274,163 @@ def scrape_bednar(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Pellenc — pellenc.com (outils viticulture/arboriculture sur batterie)
+# Pas de liste de produits centralisée : les fiches modèles sont nichées à
+# 1-2 niveaux sous chaque grande section (ex. .../vine-growing/battery-
+# power-tools/f3x-tying-machine). On explore donc chaque section racine en
+# largeur (BFS) jusqu'à une profondeur limitée, en traitant toute page avec
+# au moins une table HTML comme une fiche modèle (et en s'arrêtant là), et
+# toute page sans table comme une catégorie intermédiaire à explorer plus
+# profondément.
+# Fiche produit = la plus grande table HTML : une ligne d'en-tête (cellule 0
+# vide, variantes dans les colonnes suivantes), puis des lignes attribut/
+# valeurs. Les tables d'accessoires (ex. batterie compatible) sont plus
+# courtes et donc écartées par la priorité à la table la plus grande.
+# ─────────────────────────────────────────────────────────────────────────────
+
+PELLENC_CATEGORIES = {
+    "https://www.pellenc.com/en-gb/our-products/from-the-vineyard-to-the-winery/vine-growing": "Viticulture",
+    "https://www.pellenc.com/en-gb/our-products/from-the-vineyard-to-the-winery/winemaking": "Œnologie",
+    "https://www.pellenc.com/en-gb/our-products/fruit-growing-and-olive-growing/fruit-growing": "Arboriculture",
+}
+
+
+def _pellenc_crawl_products(page: Page, root_url: str, max_depth: int = 2) -> set:
+    visited: set = set()
+    product_links: set = set()
+    prefix = root_url.rstrip("/") + "/"
+    frontier = [(root_url, 0)]
+
+    while frontier:
+        url, depth = frontier.pop()
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            log.warning(f"    Pellenc ({url}) inaccessible : {e}")
+            continue
+
+        if page.query_selector_all("table") and url != root_url:
+            product_links.add(url)
+            continue
+
+        if depth >= max_depth:
+            continue
+
+        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+        for href in hrefs:
+            h = href.split("?")[0].split("#")[0].rstrip("/")
+            if h.startswith(prefix.rstrip("/")) and h not in visited:
+                frontier.append((h, depth + 1))
+
+    return product_links
+
+
+def _pellenc_parse_table(tables) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir de la plus grande
+    table HTML de la fiche produit (cf. commentaire ci-dessus)."""
+    for table in sorted(tables, key=len, reverse=True):
+        header_idx = None
+        for i, row in enumerate(table):
+            if not row:
+                continue
+            first = clean(row[0]) if row[0] else ""
+            rest = [clean(c) for c in row[1:] if c]
+            if not first and any(rest):
+                header_idx = i
+                break
+        if header_idx is None:
+            continue
+
+        variants = [clean(c) for c in table[header_idx][1:]]
+        if not any(variants):
+            continue
+
+        model_specs: dict = {v: {} for v in variants if v}
+        for row in table[header_idx + 1:]:
+            if not row:
+                continue
+            label = clean(row[0]) if row[0] else ""
+            if not label:
+                continue
+            for variant, val in zip(variants, row[1:]):
+                v = clean(val) if val else ""
+                if variant and v:
+                    model_specs.setdefault(variant, {})[label] = v
+
+        model_specs = {v: s for v, s in model_specs.items() if s}
+        if model_specs:
+            return model_specs
+
+    return {}
+
+
+def scrape_pellenc(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Pellenc non encore présentes dans Neon."""
+    machines = []
+    product_links: dict = {}
+
+    for root_url, category in PELLENC_CATEGORIES.items():
+        found = _pellenc_crawl_products(page, root_url)
+        log.info(f"  Pellenc ({category}) → {len(found)} fiches modèles trouvées")
+        for url in found:
+            product_links.setdefault(url, category)
+
+    log.info(f"  Pellenc → {len(product_links)} fiches modèles au total")
+
+    for i, (url, category) in enumerate(sorted(product_links.items()), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        rows_by_table = [t.query_selector_all("tr") for t in tables]
+        parsed_tables = [
+            [[clean(c.inner_text()) for c in r.query_selector_all("td, th")] for r in rows]
+            for rows in rows_by_table
+        ]
+        model_specs = _pellenc_parse_table(parsed_tables)
+        if not model_specs:
+            continue
+
+        segs = [s for s in urlparse(url).path.split("/") if s]
+        base_name = _humanize_slug(segs[-1]) if segs else ""
+
+        for variant, specs in model_specs.items():
+            if base_name and variant.lower().startswith(base_name.lower().split(" ")[0].lower()):
+                name = clean(variant)
+            else:
+                name = clean(f"{base_name} {variant}")
+            if not name or len(name) < 2:
+                continue
+            key = f"Pellenc|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Pellenc"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Pellenc → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
