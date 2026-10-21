@@ -7,9 +7,8 @@ UA = (
 )
 
 r = requests.get("https://www.mahindratractor.com/english-sitemap.xml", timeout=20, headers={"User-Agent": UA})
-print("status:", r.status_code, "bytes:", len(r.content))
 urls = re.findall(r"<loc>(.*?)</loc>", r.text)
-tractor_urls = sorted({u for u in urls if "/tractor/" in u})
-print(f"{len(tractor_urls)} URLs /tractor/ trouvees sur {len(urls)} URLs au total")
-for u in tractor_urls[:60]:
+print(f"{len(urls)} URLs au total")
+# Affiche tout, pour reperer le bon pattern de slug produit
+for u in sorted(urls):
     print(" ", u)
