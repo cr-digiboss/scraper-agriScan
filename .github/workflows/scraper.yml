@@ -1,13 +1,25 @@
 name: Scraper AgriScan
 
+# Scraper unifié (scraper_bis) : collecte des 37 marques → base de PRODUCTION → Qdrant.
+#  - chaque nuit (2h UTC, lundi → samedi) : seulement les machines absentes de la base ;
+#  - le dimanche : tout le catalogue est relu (specs modifiées, machines arrêtées) ;
+#  - lancement manuel : onglet Actions → « Scraper AgriScan » → Run workflow.
 on:
   schedule:
-    - cron: '0 2 * * *'  # chaque nuit à 2h UTC
-  workflow_dispatch:  # permet aussi un lancement manuel depuis GitHub
+    - cron: '0 2 * * 1-6'
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      marques:
+        description: "Marques (séparées par des virgules, ou « toutes »)"
+        default: "toutes"
+        required: true
+      complet:
+        description: "Relire aussi les machines déjà en base"
+        type: boolean
+        default: false
 
-# Un seul scrape à la fois : un lancement manuel pendant que le cron (ou un
-# autre lancement manuel) tourne encore attend la fin du run en cours au lieu
-# de s'exécuter en parallèle (évite les écritures concurrentes sur Neon/Qdrant).
+# Un seul scrape à la fois (nuit, dimanche, manuel ou scraper bis de test).
 concurrency:
   group: scraper-agriscan
   cancel-in-progress: false
@@ -15,6 +27,7 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +39,34 @@ jobs:
 
       - run: playwright install --with-deps chromium
 
-      - run: python scraper.py
+      - name: Tests de l'extraction
+        run: python -m scraper_bis.tests_extraction
+
+      - name: Collecte, écriture en production et indexation Qdrant
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           QDRANT_URL: ${{ secrets.QDRANT_URL }}
           QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
           QDRANT_COLLECTION: ${{ secrets.QDRANT_COLLECTION }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MARQUES: ${{ inputs.marques || 'toutes' }}
+          COMPLET: ${{ inputs.complet || github.event.schedule == '0 2 * * 0' }}
+        run: |
+          args=(--marques "$MARQUES" --ecrire --prod --qdrant)
+          if [ "$COMPLET" = "true" ]; then args+=(--complet); fi
+          python -m scraper_bis "${args[@]}"
+
+      - name: Rapport dans le résumé de l'exécution
+        if: always()
+        run: |
+          rapport=$(ls -t sortie/*/rapport.md 2>/dev/null | head -1)
+          if [ -n "$rapport" ]; then cat "$rapport" >> "$GITHUB_STEP_SUMMARY"; else echo "Aucun rapport produit." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Fichiers de sortie (brut.json, extrait.json, CSV)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-sortie
+          path: sortie/
+          retention-days: 14
+          if-no-files-found: ignore

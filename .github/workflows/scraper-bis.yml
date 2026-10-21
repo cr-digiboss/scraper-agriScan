@@ -1,0 +1,82 @@
+name: Scraper bis (test dev)
+
+# Lancement manuel uniquement : onglet Actions → « Scraper bis (test dev) » → Run workflow.
+# N'écrit jamais dans la base de production (secret DATABASE_URL_DEV, distinct de DATABASE_URL).
+on:
+  workflow_dispatch:
+    inputs:
+      marques:
+        description: "Marques (séparées par des virgules, ou « toutes »)"
+        default: "kuhn,lemken,monosem"
+        required: true
+      max_categories:
+        description: "Catégories par marque (vide = toutes)"
+        default: "2"
+        required: false
+      ecrire:
+        description: "Écrire dans la base de DEV (secret DATABASE_URL_DEV)"
+        type: boolean
+        default: false
+      complet:
+        description: "Avec écriture : relire aussi les machines déjà en base (sinon nouveautés seulement)"
+        type: boolean
+        default: false
+      llm:
+        description: "Compléter les champs manquants avec Mistral"
+        type: boolean
+        default: false
+
+# Jamais en même temps que le scraper de production
+concurrency:
+  group: scraper-agriscan
+  cancel-in-progress: false
+
+jobs:
+  scraper-bis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install -r requirements.txt
+
+      - run: playwright install --with-deps chromium
+
+      - name: Tests de l'extraction
+        run: python -m scraper_bis.tests_extraction
+
+      - name: Collecte, extraction et rapport
+        env:
+          DATABASE_URL_DEV: ${{ secrets.DATABASE_URL_DEV }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MARQUES: ${{ inputs.marques }}
+          MAX_CATEGORIES: ${{ inputs.max_categories }}
+          ECRIRE: ${{ inputs.ecrire }}
+          COMPLET: ${{ inputs.complet }}
+          LLM: ${{ inputs.llm }}
+        run: |
+          args=(--marques "$MARQUES")
+          if [ -n "$MAX_CATEGORIES" ]; then args+=(--max-categories "$MAX_CATEGORIES"); fi
+          if [ "$ECRIRE" = "true" ]; then args+=(--ecrire); fi
+          if [ "$COMPLET" = "true" ]; then args+=(--complet); fi
+          if [ "$LLM" = "true" ]; then args+=(--llm); fi
+          python -m scraper_bis "${args[@]}"
+
+      - name: Rapport dans le résumé de l'exécution
+        if: always()
+        run: |
+          rapport=$(ls -t sortie/*/rapport.md 2>/dev/null | head -1)
+          if [ -n "$rapport" ]; then cat "$rapport" >> "$GITHUB_STEP_SUMMARY"; else echo "Aucun rapport produit." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      - name: Fichiers de sortie (brut.json, extrait.json, CSV)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-bis-sortie
+          path: sortie/
+          retention-days: 14
+          if-no-files-found: ignore

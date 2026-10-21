@@ -22,8 +22,6 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page
 from bs4 import BeautifulSoup
 
-import db
-import qdrant_sync
 
 load_dotenv()
 
@@ -257,6 +255,30 @@ CATEGORIE_MOTS_CLES = [
     ("irrigation", "Matériel d'irrigation"),
     ("snow", "Déneigement"),
     ("neige", "Déneigement"),
+    # Ajoutés en fin de liste (15/10/2026) : ils ne servent que si aucun mot-clé
+    # ci-dessus ne correspond, donc aucune catégorie déjà classée ne change. Avant,
+    # ces noms de catégories des sites tombaient en « Autre ».
+    ("travail du sol", "Travail du sol"),
+    ("bodenbearbeitung", "Travail du sol"),
+    ("semis", "Semoirs"),
+    ("fertilisation", "Épandeurs"),
+    ("engrais", "Épandeurs"),
+    ("lisier", "Épandeurs"),
+    ("desherbage", "Bineuses"),
+    ("désherbage", "Bineuses"),
+    ("entretien des cultures", "Bineuses"),
+    ("fenaison", "Fenaison"),
+    ("andainage", "Fenaison"),
+    ("fourrage", "Fenaison"),
+    ("paillage", "Élevage & stabulation"),
+    ("pailleuse", "Élevage & stabulation"),
+    ("paysage", "Broyeurs"),
+    ("chargeur", "Chargeurs"),
+    ("betteravier", "Cultures spécialisées"),
+    ("haulm", "Cultures spécialisées"),
+    ("crop handling", "Cultures spécialisées"),
+    ("maraichage", "Cultures spécialisées"),
+    ("maraîchage", "Cultures spécialisées"),
 ]
 
 
@@ -5075,125 +5097,8 @@ def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
-def _upsert(machines: list[Machine]) -> tuple[int, int]:
-    """Ouvre une connexion Neon dédiée, insère, puis referme aussitôt.
-
-    Le scraping d'une seule marque/source peut prendre plusieurs minutes ;
-    garder une connexion PostgreSQL ouverte pendant tout ce temps la fait
-    couper par Neon (timeout d'inactivité). Une connexion courte par lot
-    évite complètement le problème.
-    """
-    conn = db.get_connection()
-    try:
-        return db.upsert_machines(conn, machines)
-    finally:
-        conn.close()
-
-
-def _upsert_and_index(machines: list[Machine]) -> tuple[int, int, int, int]:
-    """Enregistre les machines dans Neon puis les indexe dans Qdrant pour
-    que l'assistant IA (AgriBot) reste à jour. L'indexation Qdrant ne
-    bloque jamais le scraping : ses erreurs sont seulement journalisées."""
-    neon_ok, neon_err = _upsert(machines)
-    try:
-        qdrant_ok, qdrant_err = qdrant_sync.index_machines(machines)
-    except Exception as e:
-        log.warning(f"  Qdrant : échec indexation ({len(machines)} machines) : {e}")
-        qdrant_ok, qdrant_err = 0, len(machines)
-    return neon_ok, neon_err, qdrant_ok, qdrant_err
-
-
-def run() -> int:
-    conn = db.get_connection()
-    existing_keys = db.get_existing_keys(conn)
-    conn.close()
-    log.info(f"Neon : {len(existing_keys)} machines déjà en base")
-
-    total_ok, total_err = 0, 0
-    total_qdrant_ok, total_qdrant_err = 0, 0
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-            locale="fr-FR",
-        )
-        for nom_source, scraper_fn in [
-            ("Kverneland", scrape_kverneland),
-            ("Claas (claas.com)", scrape_claas),
-            ("Fendt (fendt.com)", scrape_fendt),
-            ("Massey Ferguson (masseyferguson.com)", scrape_massey_ferguson),
-            ("New Holland (newholland.com)", scrape_new_holland),
-            ("Case IH (caseih.com)", scrape_case_ih),
-            ("Monosem (monosem.com)", scrape_monosem),
-            ("Same (same-tractors.com)", scrape_same),
-            ("AVR (avrmachinery.com)", scrape_avr),
-            ("McHale (mchale.net)", scrape_mchale),
-            ("Kemper (kemper-stadtlohn.de)", scrape_kemper),
-            ("Pöttinger (poettinger.at)", scrape_pottinger),
-            ("Grimme (grimme.com)", scrape_grimme),
-            ("Väderstad (vaderstad.com)", scrape_vaderstad),
-            ("Lemken (lemken.com)", scrape_lemken),
-            ("Kuhn (kuhn.fr)", scrape_kuhn),
-            ("JCB (jcb.com)", scrape_jcb),
-            ("Valtra (valtra.fr)", scrape_valtra),
-            ("John Deere (deere.fr)", scrape_johndeere),
-            ("Kubota (ke.kubota-eu.com)", scrape_kubota),
-            ("Krone (krone.fr)", scrape_krone),
-            ("Güttler (guttler.org)", scrape_guttler),
-            ("Actisol (actisol-agri.fr)", scrape_actisol),
-            ("McCormick (mccormick-tractors.com)", scrape_mccormick),
-            ("Franquet (franquet.com)", scrape_franquet),
-            ("Vicon (fr.vicon.eu)", scrape_vicon),
-            ("Horsch (horsch.com)", scrape_horsch),
-            ("Sulky (sky-agriculture.com)", scrape_sulky),
-            ("Hardi (hardi.com)", scrape_hardi),
-            ("Berthoud (berthoud.com)", scrape_berthoud),
-            ("Ropa (ropa-maschinenbau.de)", scrape_ropa),
-            ("Samson (samson-agro.com)", scrape_samson),
-            ("Bogballe (bogballe.com)", scrape_bogballe),
-            ("Niubo (niubo.info)", scrape_niubo),
-            ("Agrisem (agrisem.com)", scrape_agrisem),
-            ("Einböck (einboeck.at)", scrape_einboeck),
-            ("Rauch (rauch.de)", scrape_rauch),
-            ("Amazone (amazone.net)", scrape_amazone),
-        ]:
-            log.info(f"Source : {nom_source}")
-            # Une page dédiée par source : une redirection asynchrone tardive
-            # d'un site (ex. Berthoud) peut sinon interrompre le goto() de la
-            # source suivante sur une page partagée, en cascade sur tout le
-            # reste de la liste (observé en production : Ropa + les 12
-            # marques TractorData annulées d'un coup par ce mécanisme).
-            page = context.new_page()
-            try:
-                machines = scraper_fn(page, existing_keys)
-            except Exception as e:
-                log.error(f"  ❌ Échec {nom_source} : {e}")
-                page.close()
-                continue
-            page.close()
-            if machines:
-                ok, err, q_ok, q_err = _upsert_and_index(machines)
-                total_ok += ok
-                total_err += err
-                total_qdrant_ok += q_ok
-                total_qdrant_err += q_err
-                log.info(f"  → {ok} machines enregistrées dans Neon ({err} erreurs), {q_ok} indexées dans Qdrant ({q_err} erreurs)")
-            else:
-                log.info("  → aucune nouvelle machine")
-
-        browser.close()
-
-    log.info(
-        f"Terminé : {total_ok} machines enregistrées au total ({total_err} erreurs Neon), "
-        f"{total_qdrant_ok} indexées dans Qdrant ({total_qdrant_err} erreurs)"
-    )
-    return total_ok
-
-
+# L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
+#   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
+# (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
 if __name__ == "__main__":
-    run()
+    raise SystemExit("Lancer : python -m scraper_bis --marques toutes --ecrire --prod --qdrant")
