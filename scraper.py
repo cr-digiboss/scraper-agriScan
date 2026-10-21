@@ -5456,6 +5456,162 @@ def scrape_pellenc(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Deutz-Fahr — deutz-fahr.com (tracteurs, moissonneuses-batteuses)
+# Pas de table HTML ni de specs sur la fiche produit : seulement un lien
+# vers une brochure PDF. Celle-ci contient un vrai tableau "TECHNICAL DATA"
+# (parfois scindé sur 2 pages consécutives : moteur/transmission puis
+# dimensions), avec une colonne par modèle (ex. 5095, 5100...). Les
+# attributs communs à plusieurs modèles ont leurs cellules fusionnées
+# (valeur vide = reprendre la dernière valeur non vide à gauche). Les
+# fonctionnalités "oui/non" sont des glyphes d'icône (case cochée) d'une
+# police non disponible hors du PDF : filtrés plutôt qu'affichés comme
+# caractères illisibles.
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEUTZFAHR_CATEGORIES = {
+    "https://www.deutz-fahr.com/en-nd/tractors/3-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/4e-series-stage-v": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5-df-ds-dv-ecoline-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5-df-ds-dv-ttv-series-stage-5": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5-df-series-platform": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5-tb-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5d-keyline-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5d-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5d-ttv": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5df-ds-dv-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/tractors/5df-keyline-series": "Tracteurs",
+    "https://www.deutz-fahr.com/en-nd/combine-harvesters/c6000-series": "Moissonneuses-batteuses",
+    "https://www.deutz-fahr.com/en-nd/combine-harvesters/c7000-series-stage-5": "Moissonneuses-batteuses",
+    "https://www.deutz-fahr.com/en-nd/combine-harvesters/c9300-series": "Moissonneuses-batteuses",
+}
+
+_DEUTZFAHR_ICON_STRIP = re.compile(r"[^\x20-\x7EÀ-ſ°²³º–—]")
+
+
+def _deutzfahr_clean_cell(v) -> str:
+    """Retire les glyphes d'icône (cases cochées d'une police propriétaire,
+    illisibles hors du PDF) avant de nettoyer la cellule."""
+    if not v:
+        return ""
+    return clean(_DEUTZFAHR_ICON_STRIP.sub("", str(v)))
+
+
+def _deutzfahr_parse_technical_table(table) -> dict:
+    """Retourne {variante: {attribut: valeur}} à partir d'une table
+    "TECHNICAL DATA" du PDF (cf. commentaire ci-dessus)."""
+    if len(table) < 2:
+        return {}
+    header = table[1]
+    if len(header) < 3:
+        return {}
+    variants = [_deutzfahr_clean_cell(c) for c in header[2:]]
+    if not any(variants):
+        return {}
+
+    model_specs: dict = {v: {} for v in variants if v}
+    for row in table[2:]:
+        if not row or len(row) < 3:
+            continue
+        label = _deutzfahr_clean_cell(row[0])
+        if not label:
+            continue
+        values_raw = row[2:]
+        if not any(values_raw):
+            continue  # ligne de titre de section (ex. "ENGINE"), pas de valeurs
+
+        unit = _deutzfahr_clean_cell(row[1]) if len(row) > 1 else ""
+        attr = f"{label} ({unit})" if unit else label
+
+        last = None
+        for variant, raw_val in zip(variants, values_raw):
+            val = _deutzfahr_clean_cell(raw_val)
+            if val:
+                last = val
+            if variant and last:
+                model_specs.setdefault(variant, {})[attr] = last
+
+    return {v: s for v, s in model_specs.items() if s}
+
+
+def _deutzfahr_parse_brochure_pdf(pdf_bytes: bytes) -> dict:
+    """Fusionne les tables "TECHNICAL DATA" trouvées sur toutes les pages
+    du PDF (souvent scindées sur 2 pages consécutives)."""
+    model_specs: dict = {}
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for pg in pdf.pages:
+            for table in pg.extract_tables():
+                if not table or not table[0]:
+                    continue
+                if not any("TECHNICAL DATA" in str(c).upper() for c in table[0] if c):
+                    continue
+                for variant, specs in _deutzfahr_parse_technical_table(table).items():
+                    model_specs.setdefault(variant, {}).update(specs)
+    return model_specs
+
+
+def scrape_deutzfahr(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Deutz-Fahr non encore présentes dans Neon."""
+    machines = []
+
+    for url, category in DEUTZFAHR_CATEGORIES.items():
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Deutz-Fahr ({url}) inaccessible : {e}")
+            continue
+
+        pdfs = page.eval_on_selector_all(
+            "a[href$='.pdf' i], a[href*='.pdf?' i]", "els => els.map(e => e.href)"
+        )
+        pdfs_uniq = sorted(set(pdfs))
+        if not pdfs_uniq:
+            log.warning(f"  Deutz-Fahr ({url}) → aucune brochure PDF trouvée")
+            continue
+
+        try:
+            resp = requests.get(
+                pdfs_uniq[0], timeout=30, headers={"User-Agent": "Mozilla/5.0"}
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"  Deutz-Fahr ({url}) → brochure inaccessible : {e}")
+            continue
+
+        model_specs = _deutzfahr_parse_brochure_pdf(resp.content)
+        if not model_specs:
+            log.warning(f"  Deutz-Fahr ({url}) → pas de table TECHNICAL DATA trouvée")
+            continue
+
+        base_name = clean(page.title()).split(" - ")[0] if page.title() else ""
+
+        for variant, specs in model_specs.items():
+            name = clean(variant) if base_name and variant.lower().startswith(base_name.lower()) else clean(f"{base_name} {variant}")
+            if not name or len(name) < 2:
+                continue
+            key = f"Deutz-Fahr|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Deutz-Fahr"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Deutz-Fahr → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
