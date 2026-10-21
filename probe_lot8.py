@@ -1,63 +1,34 @@
 from playwright.sync_api import sync_playwright
 
+URLS = [
+    "https://www.pellenc.com/en-gb/our-products/from-the-vineyard-to-the-winery/vine-growing/battery-power-tools/f3x-tying-machine",
+    "https://www.pellenc.com/en-gb/our-products/from-the-vineyard-to-the-winery/vine-growing/battery-power-tools/fixion-2-tying-machine",
+]
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
-
-    # --- Landini : plus de temps + variante URL ---
-    print("=" * 70)
-    print("LANDINI")
-    print("=" * 70)
     page = browser.new_page()
-    for url in ["https://www.landini.it/en/", "https://www.landini.it/en/tractors"]:
-        try:
-            page.goto(url, timeout=30000, wait_until="networkidle")
-            page.wait_for_timeout(2000)
-            print(f"\n-- {url} --  titre:", page.title(), " url finale:", page.url)
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "landini" in h})
-            print(f"{len(links)} liens:")
-            for l in links[:25]:
-                print(" ", l)
-        except Exception as e:
-            print(f"-- {url} -- ERREUR:", e)
-    page.close()
-
-    # --- Merlo : bonne URL ---
-    print("\n" + "=" * 70)
-    print("MERLO")
-    print("=" * 70)
-    page = browser.new_page()
-    for url in ["https://www.merlo.com/en/int/products", "https://www.merlo.com/en/int/"]:
-        try:
-            page.goto(url, timeout=25000, wait_until="domcontentloaded")
-            page.wait_for_timeout(3000)
-            print(f"\n-- {url} --  titre:", page.title(), " url finale:", page.url)
-            hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-            links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "merlo.com" in h})
-            print(f"{len(links)} liens:")
-            for l in links[:30]:
-                print(" ", l)
-        except Exception as e:
-            print(f"-- {url} -- ERREUR:", e)
-    page.close()
-
-    # --- Pellenc : page categorie produit ---
-    print("\n" + "=" * 70)
-    print("PELLENC - categorie")
-    print("=" * 70)
-    page = browser.new_page()
-    for url in [
-        "https://www.pellenc.com/en-gb/our-products/fruit-growing-and-olive-growing/fruit-growing/cutting",
-        "https://www.pellenc.com/en-gb/our-products/from-the-vineyard-to-the-winery/vine-growing/battery-powered-tools",
-    ]:
-        page.goto(url, timeout=25000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-        print(f"\n-- {url} --  titre:", page.title())
-        hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "pellenc.com" in h})
-        print(f"{len(links)} liens:")
-        for l in links[:30]:
-            print(" ", l)
-    page.close()
-
+    for url in URLS:
+        print("\n" + "=" * 70)
+        print(url)
+        page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(4000)
+        print("titre:", page.title())
+        tables = page.query_selector_all("table")
+        print(f"{len(tables)} tables HTML")
+        for t in tables[:3]:
+            txt = t.inner_text().strip().replace("\n", " | ")
+            print("  echantillon:", txt[:400])
+        spec_divs = page.query_selector_all(
+            "[class*='spec' i], [class*='technical' i], [class*='characteristic' i]"
+        )
+        print(f"{len(spec_divs)} divs spec-like")
+        for d in spec_divs[:3]:
+            txt = d.inner_text().strip().replace("\n", " | ")
+            if txt:
+                print("  echantillon div:", txt[:400])
+        pdfs = page.eval_on_selector_all(
+            "a[href$='.pdf' i], a[href*='.pdf?' i]", "els => els.map(e => e.href)"
+        )
+        print(f"{len(set(pdfs))} PDF uniques:", sorted(set(pdfs))[:5])
     browser.close()
