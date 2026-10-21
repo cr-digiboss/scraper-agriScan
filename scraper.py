@@ -5330,9 +5330,27 @@ def _pellenc_crawl_products(page: Page, root_url: str, max_depth: int = 2) -> se
     return product_links
 
 
+_PELLENC_ATTR_HINT = re.compile(
+    r"(weight|poids|diameter|diam[eè]tre|power|puissance|speed|vitesse|length|"
+    r"longueur|capacity|capacit[eé]|voltage|tension|pressure|pression|level|"
+    r"niveau|\bdb\b|rpm|\bhz\b|\bmm\b|\bcm\b|\bkg\b|\bg\b|\bw\b|\bv\b|life|dur[eé]e|"
+    r"time|temps|cadence|lames?|blade|warranty|garantie)",
+    re.I,
+)
+
+
 def _pellenc_parse_table(tables) -> dict:
     """Retourne {variante: {attribut: valeur}} à partir de la plus grande
-    table HTML de la fiche produit (cf. commentaire ci-dessus)."""
+    table HTML de la fiche produit qui ressemble à un vrai tableau de
+    specs (cf. commentaire ci-dessus).
+
+    Certaines pages (ex. "backpack batteries and on board batteries")
+    n'ont pas de fiche produit mais un tableau de compatibilité
+    batterie × outil (durée d'autonomie par combinaison) : les libellés
+    de lignes y sont des noms de produits ("M32C", "ALPHA 260"...), pas
+    des attributs techniques. On exige qu'une fraction significative des
+    libellés contienne un mot-clé ou une unité d'attribut technique,
+    sinon ce n'est pas une fiche de specs et on l'ignore."""
     for table in sorted(tables, key=len, reverse=True):
         header_idx = None
         for i, row in enumerate(table):
@@ -5348,6 +5366,13 @@ def _pellenc_parse_table(tables) -> dict:
 
         variants = [clean(c) for c in table[header_idx][1:]]
         if not any(variants):
+            continue
+
+        labels = [clean(row[0]) for row in table[header_idx + 1:] if row and row[0]]
+        if not labels:
+            continue
+        hint_ratio = sum(1 for l in labels if _PELLENC_ATTR_HINT.search(l)) / len(labels)
+        if hint_ratio < 0.3:
             continue
 
         model_specs: dict = {v: {} for v in variants if v}
