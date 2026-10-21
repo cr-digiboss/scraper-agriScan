@@ -5097,6 +5097,183 @@ def scrape_amazone(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Bednar — bednar.com (travail du sol, semoirs, broyeurs)
+# Les pages catégories (menu de navigation) et les vraies fiches modèles
+# partagent la même forme d'URL (bednar.com/en/<slug>/) : on ne peut pas
+# les distinguer par leur URL, seulement en excluant les ~30 slugs du menu
+# de navigation (identiques sur toutes les pages) de la liste des liens.
+# Fiche produit = 2 tables identiques (une avec juste les libellés, une
+# complète avec libellés + unité + valeurs) ; on garde la plus complète.
+# Colonne 1 = unité (ex. "m", "HP", "°") la plupart du temps, mais pas
+# toujours : certaines fiches n'ont pas de colonne unité séparée.
+# ─────────────────────────────────────────────────────────────────────────────
+
+BEDNAR_CATEGORIES = {
+    "https://www.bednar.com/en/combination-cultivators/": "Travail du sol",
+    "https://www.bednar.com/en/compact-disc-harrows/": "Déchaumeurs",
+    "https://www.bednar.com/en/cutting-rollers/": "Rouleaux",
+    "https://www.bednar.com/en/power-harrow/": "Herses rotatives",
+    "https://www.bednar.com/en/combination-subsoiler/": "Décompacteurs",
+    "https://www.bednar.com/en/fertiliser-and-seeds-hoppers/": "Trémies",
+    "https://www.bednar.com/en/crop-residue-management/": "Broyeurs",
+    "https://www.bednar.com/en/drill-masters/": "Semoirs",
+    "https://www.bednar.com/en/rollers/": "Rouleaux",
+    "https://www.bednar.com/en/rotary-hoes/": "Houes rotatives",
+    "https://www.bednar.com/en/rotary-mowers/": "Faucheuses",
+    "https://www.bednar.com/en/row-crop-cultivation-strip-tillage/": "Strip-till",
+    "https://www.bednar.com/en/row-crop-cultivators/": "Bineuses",
+    "https://www.bednar.com/en/seed-drills/": "Semoirs",
+    "https://www.bednar.com/en/seedbed-cultivators/": "Travail du sol",
+    "https://www.bednar.com/en/seeder/": "Semoirs",
+    "https://www.bednar.com/en/seeding-and-fertilisation/": "Semoirs",
+    "https://www.bednar.com/en/straw-harrows/": "Herses étrilles",
+    "https://www.bednar.com/en/strip-till-cultivators/": "Strip-till",
+    "https://www.bednar.com/en/subsoilers/": "Décompacteurs",
+    "https://www.bednar.com/en/tillage/": "Travail du sol",
+    "https://www.bednar.com/en/tine-cultivators/": "Cultivateurs à dents",
+}
+
+# Slugs du menu de navigation global (présents sur toutes les pages, donc
+# jamais des fiches modèles) — inclut les clés de BEDNAR_CATEGORIES et les
+# pages utilitaires du site.
+BEDNAR_NAV_SLUGS = set(BEDNAR_CATEGORIES.keys()) | {
+    f"https://www.bednar.com/en/{s}/"
+    for s in (
+        "24-hours-record", "a-test-ride", "agronomic-know-how", "calculator",
+        "company", "contact", "dealer-area", "distribution-network",
+        "download", "easy-operation", "field-demo", "high-productivity",
+        "history", "innovative-technology", "manufacturing", "news",
+        "press-kit", "principles-of-personal-data-protection", "products",
+        "purchase", "sales-department", "service", "spare-parts",
+        "spare-parts-configurator", "subsidies", "two-year-factory-warranty",
+    )
+}
+
+
+def _bednar_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        h = href.split("?")[0].split("#")[0]
+        if re.match(r"^https://www\.bednar\.com/en/[a-z0-9_-]+/$", h) and h not in BEDNAR_NAV_SLUGS:
+            links.add(h)
+    return links
+
+
+def _bednar_parse_spec_table(tables) -> tuple:
+    """Retourne (nom_de_base, {variante: {attribut: valeur}}) à partir de la
+    table de specs la plus complète de la fiche produit (cf. commentaire
+    ci-dessus)."""
+    candidates = [t for t in tables if len(t) >= 2 and len(t[0]) >= 2]
+    if not candidates:
+        return "", {}
+    table = max(candidates, key=len)
+    header = [clean(c) for c in table[0]]
+    base_name = header[0]
+    if not base_name:
+        return "", {}
+
+    data_rows = table[1:]
+
+    # Colonne 1 = unité (courte, sans chiffre) sur la majorité des lignes ?
+    checked = unit_like = 0
+    for row in data_rows:
+        if len(row) < 2:
+            continue
+        v = clean(row[1]) if row[1] else ""
+        if not v:
+            continue
+        checked += 1
+        if len(v) <= 4 and not any(c.isdigit() for c in v):
+            unit_like += 1
+    has_unit_col = checked > 0 and unit_like >= checked * 0.6
+
+    variants = header[2:] if has_unit_col else header[1:]
+    if not any(variants):
+        return base_name, {}
+
+    model_specs: dict = {v: {} for v in variants if v}
+    for row in data_rows:
+        label = clean(row[0]) if row[0] else ""
+        if not label:
+            continue
+        if has_unit_col:
+            unit = clean(row[1]) if len(row) > 1 and row[1] else ""
+            values = row[2:]
+        else:
+            unit = ""
+            values = row[1:]
+        attr = f"{label} ({unit})" if unit else label
+        for variant, val in zip(variants, values):
+            if variant and val and clean(val):
+                model_specs.setdefault(variant, {})[attr] = clean(val)
+
+    return base_name, {v: s for v, s in model_specs.items() if s}
+
+
+def scrape_bednar(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Bednar non encore présentes dans Neon."""
+    machines = []
+    product_links: dict = {}
+
+    for category_url, category in BEDNAR_CATEGORIES.items():
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Bednar ({category_url}) inaccessible : {e}")
+            continue
+        found = _bednar_product_links(page)
+        log.info(f"  Bednar ({category_url.rstrip('/').split('/')[-1]}) → {len(found)} liens trouvés")
+        for url in found:
+            product_links.setdefault(url, category)
+
+    log.info(f"  Bednar → {len(product_links)} fiches modèles au total")
+
+    for i, (url, category) in enumerate(sorted(product_links.items()), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        rows_by_table = [t.query_selector_all("tr") for t in tables]
+        parsed_tables = [
+            [[clean(c.inner_text()) for c in r.query_selector_all("td, th")] for r in rows]
+            for rows in rows_by_table
+        ]
+        base_name, model_specs = _bednar_parse_spec_table(parsed_tables)
+        if not model_specs:
+            continue
+
+        for variant, specs in model_specs.items():
+            name = clean(variant) if base_name and variant.lower().startswith(base_name.lower()) else clean(f"{base_name} {variant}")
+            if not name or len(name) < 2:
+                continue
+            key = f"Bednar|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Bednar"
+            m.name = name
+            m.category = category
+            m.sourceUrl = url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Bednar → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.

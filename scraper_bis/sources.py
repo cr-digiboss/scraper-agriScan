@@ -62,6 +62,7 @@ MARQUES = {
     "einboeck": {"nom": "Einböck", "fonction": "scrape_einboeck", "categories": "EINBOECK_HOME", "methode": "EXTRACTION_PDF"},
     "rauch": {"nom": "Rauch", "fonction": "scrape_rauch", "categories": "RAUCH_CATEGORIES"},
     "amazone": {"nom": "Amazone", "fonction": "scrape_amazone", "categories": "AMAZONE_CATEGORIES"},
+    "bednar": {"nom": "Bednar", "fonction": "scrape_bednar", "categories": "BEDNAR_CATEGORIES"},
 }
 
 
