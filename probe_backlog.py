@@ -1,19 +1,15 @@
 import requests
+import re
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
 )
 
-for url in [
-    "https://www.mahindratractor.com/sitemap.xml",
-    "https://www.mahindratractor.com/sitemap",
-]:
-    try:
-        r = requests.get(url, timeout=15, headers={"User-Agent": UA})
-        print(f"{url} -> {r.status_code}, {len(r.content)} bytes")
-        if r.status_code == 200:
-            txt = r.text
-            print(txt[:3000])
-    except Exception as e:
-        print(f"{url} -> ERREUR {e}")
+r = requests.get("https://www.mahindratractor.com/english-sitemap.xml", timeout=20, headers={"User-Agent": UA})
+print("status:", r.status_code, "bytes:", len(r.content))
+urls = re.findall(r"<loc>(.*?)</loc>", r.text)
+tractor_urls = sorted({u for u in urls if "/tractor/" in u})
+print(f"{len(tractor_urls)} URLs /tractor/ trouvees sur {len(urls)} URLs au total")
+for u in tractor_urls[:60]:
+    print(" ", u)
