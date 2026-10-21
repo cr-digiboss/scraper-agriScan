@@ -10,14 +10,18 @@ with sync_playwright() as p:
     page = browser.new_page(user_agent=UA)
 
     print("=" * 70)
-    print("LANDINI home/produits")
-    page.goto("https://www.landini.it/en/", timeout=25000, wait_until="domcontentloaded")
-    page.wait_for_timeout(3000)
+    print("LANDINI home")
+    page.goto("https://www.landini.it/en/", timeout=25000, wait_until="networkidle")
+    page.wait_for_timeout(5000)
     print("titre:", page.title())
+    print("url finale:", page.url)
+    html = page.content()
+    print("longueur HTML:", len(html))
+    print("extrait body:", html[html.find("<body"):html.find("<body") + 1500])
+
     hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-    links = sorted({h.split('?')[0].split('#')[0] for h in hrefs if "landini.it" in h})
-    print(f"{len(links)} liens landini.it:")
-    for l in links[:60]:
-        print(" ", l)
+    print(f"\n{len(hrefs)} liens <a> bruts (avant filtre)")
+    for h in hrefs[:40]:
+        print(" ", h)
 
     browser.close()
