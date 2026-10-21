@@ -5559,6 +5559,17 @@ def scrape_deutzfahr(page: Page, existing_keys: set) -> list[Machine]:
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
+            if "just a moment" in (page.title() or "").lower():
+                # Mur anti-bot Cloudflare : une seule nouvelle tentative
+                # après une pause plus longue avant d'abandonner la page.
+                log.warning(f"  Deutz-Fahr ({url}) → mur Cloudflare, nouvelle tentative après pause")
+                time.sleep(random.uniform(8.0, 12.0))
+                page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(4000)
+                if "just a moment" in (page.title() or "").lower():
+                    log.warning(f"  Deutz-Fahr ({url}) → toujours bloqué par Cloudflare, abandon")
+                    time.sleep(random.uniform(3.0, 5.0))
+                    continue
         except Exception as e:
             log.warning(f"  Deutz-Fahr ({url}) inaccessible : {e}")
             continue
@@ -5606,7 +5617,9 @@ def scrape_deutzfahr(page: Page, existing_keys: set) -> list[Machine]:
             existing_keys.add(key)
             log.info(f"    ✓ {name}")
 
-        time.sleep(random.uniform(1.0, 2.0))
+        # Pause plus longue qu'ailleurs entre deux pages catégorie : limite
+        # le risque de déclencher le mur anti-bot Cloudflare.
+        time.sleep(random.uniform(4.0, 7.0))
 
     log.info(f"  Deutz-Fahr → {len(machines)} machines trouvées")
     return machines
