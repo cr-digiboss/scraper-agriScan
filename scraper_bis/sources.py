@@ -63,6 +63,7 @@ MARQUES = {
     "rauch": {"nom": "Rauch", "fonction": "scrape_rauch", "categories": "RAUCH_CATEGORIES"},
     "amazone": {"nom": "Amazone", "fonction": "scrape_amazone", "categories": "AMAZONE_CATEGORIES"},
     "bednar": {"nom": "Bednar", "fonction": "scrape_bednar", "categories": "BEDNAR_CATEGORIES"},
+    "pellenc": {"nom": "Pellenc", "fonction": "scrape_pellenc", "categories": "PELLENC_CATEGORIES"},
 }
 
 
