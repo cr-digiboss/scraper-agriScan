@@ -65,6 +65,7 @@ MARQUES = {
     "bednar": {"nom": "Bednar", "fonction": "scrape_bednar", "categories": "BEDNAR_CATEGORIES"},
     "pellenc": {"nom": "Pellenc", "fonction": "scrape_pellenc", "categories": "PELLENC_CATEGORIES"},
     "mahindra": {"nom": "Mahindra", "fonction": "scrape_mahindra", "categories": "MAHINDRA_SITEMAP_URL"},
+    "landini": {"nom": "Landini", "fonction": "scrape_landini", "categories": "LANDINI_PRODUCT_PAGES", "methode": "EXTRACTION_PDF"},
 }
 
 

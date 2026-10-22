@@ -5570,6 +5570,148 @@ def scrape_mahindra(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Landini — landini-tractors.com (tracteurs, site réel : landini.it n'est
+# qu'un stub, le canonical redirige vers ce domaine Adobe AEM)
+# Catalogue limité à 3 gammes, chacune avec une brochure PDF technique.
+# Les tableaux de specs du PDF n'ont PAS le nom de variante dans la grille
+# du tableau (contrairement à ce qu'on pourrait attendre) : il n'apparaît
+# qu'en texte libre juste au-dessus du tableau. On réaligne donc chaque
+# colonne de valeurs avec son nom de variante via les coordonnées x
+# (bbox des cellules vs bbox des mots d'en-tête). Seules les lignes où
+# chaque colonne-variante a sa propre cellule (pas de fusion/texte à
+# puces "l"/"¡" partagé entre plusieurs variantes) sont retenues, pour
+# éviter d'attribuer des valeurs ambiguës à la mauvaise variante.
+# ─────────────────────────────────────────────────────────────────────────────
+
+LANDINI_PRODUCT_PAGES = {
+    "https://landini-tractors.com/it/it/prodotti/serie-5.html": "Tracteurs",
+    "https://landini-tractors.com/it/it/prodotti/rex4-cab.html": "Tracteurs",
+    "https://landini-tractors.com/it/it/prodotti/serie-6rs.html": "Tracteurs",
+}
+
+_LANDINI_VALID_VARIANT = re.compile(r"^[A-Z0-9][A-Z0-9\s\-/]{1,40}$")
+
+
+def _landini_brochure_url(page: Page, product_url: str) -> str | None:
+    try:
+        page.goto(product_url, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+    except Exception as e:
+        log.warning(f"    Landini ({product_url}) inaccessible : {e}")
+        return None
+    pdfs = page.eval_on_selector_all("a[href$='.pdf' i], a[href*='.pdf?' i]", "els => els.map(e => e.href)")
+    return sorted(set(pdfs))[0] if pdfs else None
+
+
+def _landini_variant_columns(table, words) -> dict:
+    """Associe chaque colonne de valeurs (au-delà de label + unité) au nom
+    de variante trouvé juste au-dessus de la table, via alignement x."""
+    ref_row = max(table.rows, key=lambda r: sum(1 for c in r.cells if c))
+    col_bboxes = {i: c for i, c in enumerate(ref_row.cells) if c}
+    if len(col_bboxes) < 3:
+        return {}
+
+    value_col_idxs = sorted(col_bboxes.keys())[2:] or sorted(col_bboxes.keys())[1:]
+    table_top = table.bbox[1]
+    header_words = [w for w in words if table_top - 30 <= w["bottom"] <= table_top + 2]
+
+    mapping = {}
+    for idx in value_col_idxs:
+        x0, _, x1, _ = col_bboxes[idx]
+        nearby = [w for w in header_words if x0 <= (w["x0"] + w["x1"]) / 2 <= x1]
+        if nearby:
+            mapping[idx] = clean(" ".join(w["text"] for w in nearby))
+    return mapping
+
+
+def _landini_parse_brochure(pdf_bytes: bytes) -> dict:
+    """Retourne {nom_variante: {attribut: valeur}} en parcourant toutes les
+    pages/tables du PDF et en ne gardant que les lignes sans fusion entre
+    colonnes-variantes."""
+    import pdfplumber
+    from io import BytesIO
+
+    model_specs: dict = {}
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+        for page in pdf.pages:
+            tables = page.find_tables()
+            if not tables:
+                continue
+            words = page.extract_words()
+            for table in tables:
+                mapping = _landini_variant_columns(table, words)
+                if not mapping:
+                    continue
+                for variant in mapping.values():
+                    model_specs.setdefault(variant, {})
+                data = table.extract()
+                value_col_idxs = sorted(mapping.keys())
+                for row_i, row in enumerate(data):
+                    row_obj = table.rows[row_i]
+                    label_cell = clean(row[0]) if row[0] else ""
+                    if not label_cell:
+                        continue
+                    unit_cell = clean(row[1]) if len(row) > 1 and row[1] else ""
+                    clean_row = all(row_obj.cells[i] is not None for i in value_col_idxs)
+                    if not clean_row:
+                        continue
+                    attr = f"{label_cell} ({unit_cell})" if unit_cell else label_cell
+                    for idx in value_col_idxs:
+                        variant = mapping.get(idx)
+                        val = clean(row[idx]) if idx < len(row) and row[idx] else ""
+                        if variant and val:
+                            model_specs.setdefault(variant, {})[attr] = val
+
+    return {
+        v: s
+        for v, s in model_specs.items()
+        if s and _LANDINI_VALID_VARIANT.match(v) and any(c.isdigit() for c in v)
+    }
+
+
+def scrape_landini(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les 3 gammes Landini via leur brochure PDF technique."""
+    machines = []
+
+    for product_url, category in LANDINI_PRODUCT_PAGES.items():
+        pdf_url = _landini_brochure_url(page, product_url)
+        if not pdf_url:
+            log.warning(f"  Landini ({product_url}) : aucune brochure PDF trouvée")
+            continue
+        try:
+            resp = requests.get(pdf_url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"  Landini ({pdf_url}) inaccessible : {e}")
+            continue
+
+        model_specs = _landini_parse_brochure(resp.content)
+        log.info(f"  Landini ({product_url.rstrip('/').split('/')[-1]}) → {len(model_specs)} variantes")
+
+        for variant, specs in model_specs.items():
+            name = clean(f"Landini {variant}")
+            key = f"Landini|{name}|"
+            if key in existing_keys:
+                continue
+
+            m = Machine()
+            m.brand = "Landini"
+            m.name = name
+            m.category = category
+            m.sourceUrl = pdf_url
+            m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+            m.statut = "active"
+            machines.append(m)
+            existing_keys.add(key)
+            log.info(f"    ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Landini → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
