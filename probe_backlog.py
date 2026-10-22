@@ -76,6 +76,8 @@ for label, url in PDFS.items():
                         if variant and val and label_cell:
                             attr = f"{label_cell} ({unit_cell})" if unit_cell else label_cell
                             all_specs[variant][attr] = val
-        print(f"{len(all_specs)} variantes trouvees:")
-        for v, specs in all_specs.items():
+        VALID_VARIANT = re.compile(r"^[A-Z0-9][A-Z0-9\s\-/]{1,40}$")
+        filtered = {v: s for v, s in all_specs.items() if VALID_VARIANT.match(v) and any(c.isdigit() for c in v)}
+        print(f"{len(all_specs)} variantes brutes -> {len(filtered)} apres filtre regex:")
+        for v, specs in filtered.items():
             print(f"  '{v}': {len(specs)} attributs -> {dict(list(specs.items())[:4])}")
