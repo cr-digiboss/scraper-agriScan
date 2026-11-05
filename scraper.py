@@ -5712,6 +5712,232 @@ def scrape_landini(page: Page, existing_keys: set) -> list[Machine]:
     return machines
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Weidemann — weidemann.de (chargeuses compactes/sur roues/télescopiques)
+# Catalogue en 4 catégories (URLs allemandes, pas de version EN du catalogue).
+# Chaque fiche produit a une sous-page dédiée /technische-daten/tab listant
+# les specs dans ~10 tables HTML propres à 2 colonnes (label, valeur). Les
+# dernières tables de la page sont des notes légales/vibrations à exclure
+# (toute table dont une cellule dépasse une longueur raisonnable, ou dont
+# une ligne n'a pas exactement 2 colonnes, est écartée).
+# ─────────────────────────────────────────────────────────────────────────────
+
+WEIDEMANN_CATEGORIES = {
+    "https://www.weidemann.de/produkte/hoflader": "Chargeuses compactes",
+    "https://www.weidemann.de/produkte/radlader": "Chargeuses sur roues",
+    "https://www.weidemann.de/produkte/teleskoplader": "Chargeuses télescopiques",
+    "https://www.weidemann.de/produkte/teleskopradlader": "Chargeuses télescopiques sur roues",
+}
+
+
+def _weidemann_product_links(page: Page, category_url: str) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    prefix = category_url.rstrip("/") + "/"
+    links = set()
+    for href in hrefs:
+        h = href.split("?")[0].split("#")[0].rstrip("/")
+        if h.startswith(prefix) and "/" not in h[len(prefix):]:
+            links.add(h)
+    return links
+
+
+def _weidemann_parse_specs_tables(tables: list) -> dict:
+    specs: dict = {}
+    for table in tables:
+        if not table or not all(len(row) == 2 for row in table):
+            continue
+        if any(len(c) > 150 for row in table for c in row):
+            continue
+        for label, value in table:
+            label, value = clean(label), clean(value)
+            if not label or not value:
+                continue
+            key = label
+            n = 2
+            while key in specs and specs[key] != value:
+                key = f"{label} ({n})"
+                n += 1
+            specs[key] = value
+    return specs
+
+
+def scrape_weidemann(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Weidemann non encore présentes dans Neon."""
+    machines = []
+    product_links: dict = {}
+
+    for category_url, category in WEIDEMANN_CATEGORIES.items():
+        try:
+            page.goto(category_url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            log.warning(f"  Weidemann ({category_url}) inaccessible : {e}")
+            continue
+        found = _weidemann_product_links(page, category_url)
+        log.info(f"  Weidemann ({category_url.rstrip('/').split('/')[-1]}) → {len(found)} liens trouvés")
+        for url in found:
+            product_links.setdefault(url, category)
+
+    log.info(f"  Weidemann → {len(product_links)} fiches modèles au total")
+
+    for i, (url, category) in enumerate(sorted(product_links.items()), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+            title = page.title()
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        name_part = clean(title.split("|")[0])
+        if not name_part:
+            continue
+        name = name_part if name_part.lower().startswith("weidemann") else clean(f"Weidemann {name_part}")
+
+        try:
+            page.goto(f"{url}/technische-daten/tab", timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            log.warning(f"    Erreur {url}/technische-daten/tab → {e}")
+            continue
+
+        tables = page.query_selector_all("table")
+        parsed_tables = [
+            [[clean(c.inner_text()) for c in r.query_selector_all("td, th")] for r in t.query_selector_all("tr")]
+            for t in tables
+        ]
+        specs = _weidemann_parse_specs_tables(parsed_tables)
+        if not specs:
+            continue
+
+        key = f"Weidemann|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Weidemann"
+        m.name = name
+        m.category = category
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Weidemann → {len(machines)} machines trouvées")
+    return machines
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Schäffer — schaeffer.de (chargeuses compactes/sur roues/télescopiques)
+# La page catalogue agriculture liste directement toutes les URLs produits
+# (slugs numérotés /en/products/<id>/<slug>). Chaque fiche produit a un bloc
+# #techdata structuré en sections (ex. "Engine", "Tyres", "Dimensions") et,
+# pour chacune, des lignes "Label: Valeur" — pas une table HTML classique.
+# ─────────────────────────────────────────────────────────────────────────────
+
+SCHAFFER_PRODUCTS_URL = "https://www.schaeffer.de/en/agriculture/products/"
+
+_SCHAFFER_TECHDATA_JS = """
+el => Array.from(el.querySelectorAll('.items > .item-col > ul > li')).map(li => {
+    const section = li.childNodes.length ? li.childNodes[0].textContent.trim() : '';
+    const items = Array.from(li.querySelectorAll('ul.child-list > li')).map(c => c.textContent.trim());
+    return {section: section, items: items};
+})
+"""
+
+
+def _schaffer_product_links(page: Page) -> set:
+    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    links = set()
+    for href in hrefs:
+        h = href.split("?")[0].split("#")[0]
+        if re.match(r"^https://www\.schaeffer\.de/en/products/\d+/[a-z0-9-]+$", h):
+            links.add(h)
+    return links
+
+
+def _schaffer_parse_techdata(page: Page) -> dict:
+    el = page.query_selector("#techdata")
+    if not el:
+        return {}
+    try:
+        groups = el.evaluate(_SCHAFFER_TECHDATA_JS)
+    except Exception:
+        return {}
+
+    specs: dict = {}
+    for group in groups:
+        for item in group.get("items", []):
+            if ":" not in item:
+                continue
+            label, _, value = item.partition(":")
+            label, value = clean(label), clean(value)
+            if not label or not value:
+                continue
+            key = label
+            n = 2
+            while key in specs and specs[key] != value:
+                key = f"{label} ({n})"
+                n += 1
+            specs[key] = value
+    return specs
+
+
+def scrape_schaeffer(page: Page, existing_keys: set) -> list[Machine]:
+    """Scrape les fiches modèles Schäffer non encore présentes dans Neon."""
+    machines = []
+
+    try:
+        page.goto(SCHAFFER_PRODUCTS_URL, timeout=30000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        product_links = _schaffer_product_links(page)
+    except Exception as e:
+        log.warning(f"  Schäffer (catalogue) inaccessible : {e}")
+        return machines
+
+    log.info(f"  Schäffer → {len(product_links)} fiches modèles candidates")
+
+    for i, url in enumerate(sorted(product_links), 1):
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+        except Exception as e:
+            log.warning(f"    Erreur {url} → {e}")
+            continue
+
+        slug = url.rstrip("/").split("/")[-1]
+        name_part = " ".join(w.capitalize() for w in slug.split("-"))
+        name = clean(f"Schäffer {name_part}")
+
+        specs = _schaffer_parse_techdata(page)
+        if not specs:
+            continue
+
+        key = f"Schäffer|{name}|"
+        if key in existing_keys:
+            continue
+
+        m = Machine()
+        m.brand = "Schäffer"
+        m.name = name
+        m.category = "Chargeuses"
+        m.sourceUrl = url
+        m.specs = json.dumps(traduire_specs(specs), ensure_ascii=False)
+        m.statut = "active"
+        machines.append(m)
+        existing_keys.add(key)
+        log.info(f"    [{i}/{len(product_links)}] ✓ {name}")
+
+        time.sleep(random.uniform(1.0, 2.0))
+
+    log.info(f"  Schäffer → {len(machines)} machines trouvées")
+    return machines
+
+
 # L'enregistrement en base et l'indexation Qdrant sont faits par le scraper unifié :
 #   python -m scraper_bis --marques toutes --ecrire --prod --qdrant
 # (voir scraper_bis/LISEZMOI.md). Ce fichier ne contient plus que les fonctions de collecte.
