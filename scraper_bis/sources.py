@@ -66,6 +66,8 @@ MARQUES = {
     "pellenc": {"nom": "Pellenc", "fonction": "scrape_pellenc", "categories": "PELLENC_CATEGORIES"},
     "mahindra": {"nom": "Mahindra", "fonction": "scrape_mahindra", "categories": "MAHINDRA_SITEMAP_URL"},
     "landini": {"nom": "Landini", "fonction": "scrape_landini", "categories": "LANDINI_PRODUCT_PAGES", "methode": "EXTRACTION_PDF"},
+    "weidemann": {"nom": "Weidemann", "fonction": "scrape_weidemann", "categories": "WEIDEMANN_CATEGORIES"},
+    "schaeffer": {"nom": "Schäffer", "fonction": "scrape_schaeffer", "categories": "SCHAFFER_PRODUCTS_URL"},
 }
 
 
